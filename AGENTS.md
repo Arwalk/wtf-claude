@@ -12,8 +12,8 @@ behaviour.
 - `gofmt -l .` must print nothing.
 - Layout changes: `go test ./internal/render -update`, then read the diff of
   `internal/render/testdata/*.golden` line by line (with `git diff`, or
-  against a copy of `testdata/` taken before regenerating). Never regenerate goldens
-  to make an unexplained failure go away.
+  against a copy of `testdata/` taken before regenerating). Never regenerate
+  goldens to make an unexplained failure go away.
 - Platform-specific code: also run
   `for os in darwin windows freebsd; do GOOS=$os go vet ./...; done`.
 
@@ -49,9 +49,11 @@ behaviour.
   `localstats.ScanError` follows the same pattern.
 - Platform code comes in build-tagged pairs with a harmless fallback, e.g.
   `internal/cache/lock_flock.go` / `lock_other.go`.
-- Exit codes: 0 when anything useful was printed; inside wtfutil
-  (`WTF_WIDGET_WIDTH` set) errors exit 0 because the message is the widget's
-  content. See README "Usage".
+- Exit codes: 0 when anything useful was printed, 1 when only an error could
+  be shown, 2 for invalid flags. Inside wtfutil (`WTF_WIDGET_WIDTH` set) the
+  "only an error" case exits 0 instead, because the message is the widget's
+  content; invalid flags still exit 2 but are also printed to stdout, since
+  cmdrunner discards stderr. See README "Usage".
 - Tests isolate themselves with `t.TempDir()`, `t.Setenv("HOME", …)` and
   `httptest` servers (see `setup` in `cmd/claude-usage/main_test.go`); new
   tests must not depend on the real `~/.claude` or the network.
