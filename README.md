@@ -71,7 +71,8 @@ claude-usage [flags]
                              inside wtfutil (WTF_WIDGET_WIDTH is set);
                              NO_COLOR disables auto colour
   --width N                  width in cells (default: $WTF_WIDGET_WIDTH,
-                             then $COLUMNS, then 60)
+                             then $COLUMNS, then the terminal width up to
+                             80, then 60)
   --height N                 max rows; less important lines are dropped to
                              fit (default: $WTF_WIDGET_HEIGHT, else unlimited)
   --compact                  limits only, one line each (for small widgets)

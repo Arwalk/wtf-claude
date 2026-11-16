@@ -78,7 +78,7 @@ func parseFlags(args []string, stderr io.Writer) (*config, error) {
 	sections := strings.Join(allSections, ",")
 	fs.StringVar(&c.format, "format", "ansi", "output format: ansi, plain or json")
 	fs.StringVar(&c.color, "color", "auto", "colour: auto, always or never (auto = TTY or inside wtfutil; NO_COLOR respected)")
-	fs.IntVar(&c.width, "width", 0, "output width in cells (default: $WTF_WIDGET_WIDTH, $COLUMNS, or 60)")
+	fs.IntVar(&c.width, "width", 0, "output width in cells (default: $WTF_WIDGET_WIDTH, $COLUMNS, the terminal width up to 80, or 60)")
 	fs.IntVar(&c.height, "height", 0, "max output rows; less important lines are dropped to fit (default: $WTF_WIDGET_HEIGHT, else unlimited)")
 	fs.BoolVar(&c.compact, "compact", false, "one line per limit, nothing else (for small widgets)")
 	fs.StringVar(&sections, "sections", sections, "comma-separated sections to show: "+strings.Join(allSections, ","))
@@ -151,9 +151,16 @@ func parseFlags(args []string, stderr io.Writer) (*config, error) {
 type env struct {
 	getenv func(string) string
 	isTTY  bool
-	now    func() time.Time
-	loc    *time.Location
+	// termWidth is the terminal's column count when stdout is a TTY (0 = unknown).
+	termWidth int
+	now       func() time.Time
+	loc       *time.Location
 }
+
+// maxAutoWidth caps a width taken from the terminal size, so a very wide
+// terminal doesn't stretch the bars across the whole screen. Explicit
+// widths (--width, WTF_WIDGET_WIDTH, COLUMNS) are not capped.
+const maxAutoWidth = 80
 
 func outputWidth(c *config, e env) int {
 	if c.width > 0 {
@@ -166,6 +173,9 @@ func outputWidth(c *config, e env) int {
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(e.getenv("COLUMNS"))); err == nil && v > 0 {
 		return v
+	}
+	if e.termWidth > 0 {
+		return min(e.termWidth, maxAutoWidth)
 	}
 	return 60
 }
@@ -223,6 +233,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if fi, err := os.Stdout.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 		e.isTTY = true
+		e.termWidth = terminalWidth(os.Stdout)
 	}
 	rep := collect(c, e)
 	if c.format == "json" {

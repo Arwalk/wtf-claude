@@ -39,6 +39,47 @@ func TestOutputWidth(t *testing.T) {
 	}
 }
 
+func TestOutputWidthFromTerminal(t *testing.T) {
+	c := &config{}
+	withTerm := func(m map[string]string, w int) env {
+		e := fakeEnv(m, true)
+		e.termWidth = w
+		return e
+	}
+	cases := []struct {
+		name string
+		env  env
+		want int
+	}{
+		{"narrow terminal", withTerm(nil, 50), 50},
+		{"wide terminal capped", withTerm(nil, 200), maxAutoWidth},
+		{"COLUMNS beats terminal", withTerm(map[string]string{"COLUMNS": "100"}, 50), 100},
+		{"widget beats terminal", withTerm(map[string]string{"WTF_WIDGET_WIDTH": "40"}, 70), 40},
+		{"unknown size", withTerm(nil, 0), 60},
+	}
+	for _, tc := range cases {
+		if got := outputWidth(c, tc.env); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	c.width = 25
+	if got := outputWidth(c, withTerm(nil, 70)); got != 25 {
+		t.Errorf("flag: got %d, want 25", got)
+	}
+}
+
+// A regular file is not a terminal: no size, no panic.
+func TestTerminalWidthNotATTY(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "notatty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if w := terminalWidth(f); w != 0 {
+		t.Errorf("terminalWidth(regular file) = %d, want 0", w)
+	}
+}
+
 func TestUseColor(t *testing.T) {
 	cases := []struct {
 		format, color string
