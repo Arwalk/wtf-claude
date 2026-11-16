@@ -1,0 +1,59 @@
+# Minimal wtfutil config showing Claude usage with the built-in cmdrunner
+# module. Copy to ~/.config/wtf/config.yml (or merge the `mods` entries into
+# your existing config) and make sure `claude-usage` is on wtfutil's PATH.
+# Otherwise give the full path, e.g. "/home/you/go/bin/claude-usage" (see
+# `go env GOPATH`); "~" in cmd is only expanded by wtfutil 0.51 and newer.
+#
+# cmdrunner sets WTF_WIDGET_WIDTH and WTF_WIDGET_HEIGHT, so claude-usage
+# sizes its bars to the widget, drops less important lines when rows run
+# short, and turns ANSI colour on automatically.
+wtf:
+  colors:
+    border:
+      focusable: darkslateblue
+      focused: orange
+      normal: gray
+  grid:
+    # One 62-cell column (60 inside the border); a 17-line row for the full
+    # view and a 5-line row for the compact view (15 and 3 rows inside).
+    # The full view needs about 12 rows for two limits plus 3 per extra
+    # limit and 1 each for a stale note or extra usage; when short of rows
+    # it drops details first (see README).
+    columns: [62]
+    rows: [17, 5]
+  refreshInterval: 1
+  mods:
+    # Full view: plan, limits with reset/pace, 7-day breakdown, extra usage
+    # (only when enabled) and local Claude Code token stats.
+    claude:
+      type: cmdrunner
+      title: "Claude"
+      cmd: "claude-usage"
+      # A cache TTL slightly below refreshInterval makes every refresh fetch
+      # fresh numbers. Widgets refreshing at the same moment share one
+      # request through the cache (the others wait for it and read it).
+      args: ["--cache-ttl", "110"]
+      enabled: true
+      position:
+        top: 0
+        left: 0
+        height: 1
+        width: 1
+      refreshInterval: 120
+
+    # Compact view: one line per limit (label, bar, % left, reset countdown).
+    # Needs one row per limit (plus one for a stale note); with fewer rows
+    # the binding limit and the most used ones are kept. Good for a corner
+    # of an existing dashboard.
+    claude_compact:
+      type: cmdrunner
+      title: "Claude"
+      cmd: "claude-usage"
+      args: ["--compact", "--cache-ttl", "110"]
+      enabled: true
+      position:
+        top: 1
+        left: 0
+        height: 1
+        width: 1
+      refreshInterval: 120
