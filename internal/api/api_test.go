@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseUsageFixture(t *testing.T) {
@@ -212,5 +214,12 @@ func TestPercentStringWithSign(t *testing.T) {
 	}
 	if u.Limits[1].Percent != nil {
 		t.Errorf("n/a should be unknown, got %v", *u.Limits[1].Percent)
+	}
+}
+
+func TestDescribeKeepsUTF8(t *testing.T) {
+	got := Describe(errors.New(strings.Repeat("é", 50))) // 100 bytes
+	if !utf8.ValidString(got) || len(got) > 60 || !strings.HasSuffix(got, "...") {
+		t.Errorf("Describe = %q (%d bytes)", got, len(got))
 	}
 }

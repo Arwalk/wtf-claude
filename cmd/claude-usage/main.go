@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"claude-usage/internal/api"
 	"claude-usage/internal/cache"
@@ -445,7 +446,18 @@ func shortErr(err error) string {
 		return "not logged in · run claude"
 	}
 	if len(msg) > 120 {
-		msg = msg[:117] + "..."
+		msg = cutAtRune(msg, 117) + "..."
 	}
 	return msg
+}
+
+// cutAtRune cuts s to at most n bytes without splitting a UTF-8 character.
+func cutAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

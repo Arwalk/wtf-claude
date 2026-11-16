@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -167,7 +168,7 @@ func Describe(err error) string {
 		}
 	}
 	if len(msg) > 60 {
-		msg = msg[:57] + "..."
+		msg = cutAtRune(msg, 57) + "..."
 	}
 	return msg
 }
@@ -179,4 +180,15 @@ func isStatusText(s string) bool {
 		}
 	}
 	return false
+}
+
+// cutAtRune cuts s to at most n bytes without splitting a UTF-8 character.
+func cutAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

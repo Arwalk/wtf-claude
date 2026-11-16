@@ -303,3 +303,18 @@ func TestSpend(t *testing.T) {
 		t.Errorf("extra_usage = %+v", s)
 	}
 }
+
+func TestLabelsNonASCII(t *testing.T) {
+	cases := []struct{ got, want string }{
+		{LimitLabel("éclair_kind", "", ""), "Éclair kind"},
+		{LimitLabel("seven_day_ébène", "", ""), "Weekly · Ébène"},
+		{ShortLabel("seven_day_ébène", "", ""), "Ébène"},
+		{TierLabel("default_claude_über_5x"), "Über 5x"},
+		{LimitLabel("monthly_moonbeam", "", ""), "Monthly moonbeam"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("got %q, want %q", c.got, c.want)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func fakeEnv(m map[string]string, tty bool) env {
@@ -513,5 +515,12 @@ func TestLocalErrorInJSON(t *testing.T) {
 	}
 	if !strings.HasPrefix(rep.Status.LocalError, "permission denied (") {
 		t.Errorf("local_error = %q", rep.Status.LocalError)
+	}
+}
+
+func TestShortErrKeepsUTF8(t *testing.T) {
+	got := shortErr(errors.New(strings.Repeat("é", 100))) // 200 bytes
+	if !utf8.ValidString(got) || len(got) > 120 || !strings.HasSuffix(got, "...") {
+		t.Errorf("shortErr = %q (%d bytes)", got, len(got))
 	}
 }

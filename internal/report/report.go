@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"claude-usage/internal/api"
 	"claude-usage/internal/localstats"
@@ -294,7 +296,7 @@ func humanize(s string) string {
 	if s == "" {
 		return ""
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return upperFirst(s)
 }
 
 func titleWord(s string) string {
@@ -304,9 +306,19 @@ func titleWord(s string) string {
 			words[i] = "OAuth"
 			continue
 		}
-		words[i] = strings.ToUpper(w[:1]) + w[1:]
+		words[i] = upperFirst(w)
 	}
 	return strings.Join(words, " ")
+}
+
+// upperFirst upper-cases the first character of s without splitting a
+// multi-byte UTF-8 character (s[:1] would).
+func upperFirst(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError {
+		return s // empty or invalid: leave as is
+	}
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // severityFor combines the thresholds (green above 30% left, yellow down to
@@ -541,7 +553,7 @@ func TierLabel(t string) string {
 		if len(w) > 1 && strings.HasSuffix(w, "x") && strings.Trim(w[:len(w)-1], "0123456789") == "" {
 			continue // "20x"
 		}
-		words[i] = strings.ToUpper(w[:1]) + w[1:]
+		words[i] = upperFirst(w)
 	}
 	return strings.Join(words, " ")
 }

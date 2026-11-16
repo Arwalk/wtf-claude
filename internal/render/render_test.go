@@ -486,3 +486,43 @@ func TestLocalErrorShown(t *testing.T) {
 		t.Errorf("partial error must not hide stats:\n%s", got)
 	}
 }
+
+func TestStripControls(t *testing.T) {
+	cases := map[string]string{
+		"plain":                "plain",
+		"Weekly · Fable ▸ 日本":  "Weekly · Fable ▸ 日本",
+		"a\x1b[31mb":           "a[31mb",
+		"t\x1b]0;x\x07":        "t]0;x",
+		"line\nbreak\ttab":     "linebreaktab",
+		"c1\u009bx":            "c1x",
+		"bidi\u202eevil\u2066": "bidievil",
+	}
+	for in, want := range cases {
+		if got := stripControls(in); got != want {
+			t.Errorf("stripControls(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Text from the API and transcripts can never inject escapes or extra rows.
+func TestUntrustedTextIsSanitized(t *testing.T) {
+	r := fixtureReport(t)
+	r.Plan.Display = "Ultra\nplan"
+	r.Limits[0].Label = "Weekly \x1b[2J\x1b]0;pwned\x07 all"
+	r.Limits[0].ShortLabel = "All\x1b[31m"
+	r.Breakdown.Rows[0].Name = "Claude\u202eCode"
+	r.Local.Week.Models[0].Model = "claude-opus\x1b[5m"
+	clean := renderString(t, fixtureReport(t), Options{Width: 60, Loc: cet})
+	got := renderString(t, r, Options{Width: 60, Loc: cet})
+	if strings.ContainsAny(got, "\x1b\x07\u202e") {
+		t.Errorf("control characters leaked:\n%q", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(clean, "\n") {
+		t.Errorf("a newline in a label added a row:\n%s", got)
+	}
+	for i, l := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+		if cw := cellWidth(l); cw > 60 {
+			t.Errorf("line %d is %d cells: %q", i+1, cw, l)
+		}
+	}
+}

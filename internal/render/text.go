@@ -92,20 +92,44 @@ func (l line) truncate(w int) line {
 func (l line) render(color bool) string {
 	var b strings.Builder
 	for _, s := range l {
-		if s.text == "" {
+		text := stripControls(s.text)
+		if text == "" {
 			continue
 		}
 		if color && s.st != plain {
 			b.WriteString("\x1b[")
 			b.WriteString(s.st.sgr())
 			b.WriteString("m")
-			b.WriteString(s.text)
+			b.WriteString(text)
 			b.WriteString("\x1b[0m")
 		} else {
-			b.WriteString(s.text)
+			b.WriteString(text)
 		}
 	}
 	return strings.TrimRight(b.String(), " ")
+}
+
+// stripControls removes characters a terminal would act on instead of
+// printing: C0/C1 control codes (ESC starts escape sequences, a newline would
+// add a row) and Unicode bidirectional overrides, which can reorder what is
+// displayed. Labels come from an undocumented API and from transcript files,
+// so every segment passes through here before it is written.
+func stripControls(s string) string {
+	if strings.IndexFunc(s, unsafeRune) < 0 {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if unsafeRune(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// unsafeRune reports whether r is a control or bidi-override character.
+func unsafeRune(r rune) bool {
+	return r < 0x20 || (r >= 0x7f && r < 0xa0) ||
+		(r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
 
 // cellWidth approximates the terminal column width of s.
