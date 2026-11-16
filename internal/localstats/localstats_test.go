@@ -1,10 +1,13 @@
 package localstats
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -245,4 +248,64 @@ func TestDefaultDirsExplicit(t *testing.T) {
 // lchtimes sets a symlink's own mtime, like `touch -h`.
 func lchtimes(path string, t time.Time) error {
 	return exec.Command("touch", "-h", "-d", t.UTC().Format("2006-01-02T15:04:05Z"), path).Run()
+}
+
+func skipIfPermsIgnored(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("permission bits are not enforced here")
+	}
+}
+
+// Unreadable files and directories are reported (reason first) while
+// everything readable is still counted.
+func TestScanReportsUnreadable(t *testing.T) {
+	skipIfPermsIgnored(t)
+	dir := t.TempDir()
+	since := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	writeFile(t, filepath.Join(dir, "ok", "a.jsonl"), asst("2026-11-16T10:00:00Z", "s1", "r1", "m1", "claude-x", 1, 1, 1, 1))
+
+	locked := filepath.Join(dir, "locked")
+	writeFile(t, filepath.Join(locked, "b.jsonl"), asst("2026-11-16T10:00:00Z", "s2", "r2", "m2", "claude-x", 1, 1, 1, 1))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	res, err := Scan([]string{dir}, since)
+	if len(res.Entries) != 1 {
+		t.Errorf("readable entries = %d, want 1", len(res.Entries))
+	}
+	var se *ScanError
+	if !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v, want *ScanError wrapping permission denied", err)
+	}
+	if !strings.HasPrefix(err.Error(), "permission denied (") || !strings.Contains(err.Error(), "locked") {
+		t.Errorf("message = %q, want reason first then path", err.Error())
+	}
+}
+
+func TestScanReportsUnreadableFile(t *testing.T) {
+	skipIfPermsIgnored(t)
+	dir := t.TempDir()
+	p := filepath.Join(dir, "p", "a.jsonl")
+	writeFile(t, p, asst("2026-11-16T10:00:00Z", "s1", "r1", "m1", "claude-x", 1, 1, 1, 1))
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Scan([]string{dir}, time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC))
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("err = %v, want permission denied", err)
+	}
+}
+
+// Vanished files and dangling links are normal while Claude Code runs.
+func TestScanIgnoresMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "gone.jsonl"), filepath.Join(dir, "dangling.jsonl")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if _, err := Scan([]string{dir, filepath.Join(dir, "does-not-exist")}, time.Time{}); err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -488,5 +489,29 @@ func TestEndedWindowFallsBackToRollingWeek(t *testing.T) {
 	}
 	if rep.Local.WeekFromAPI || rep.Local.Week.Label != "7d" {
 		t.Errorf("week = %+v", rep.Local)
+	}
+}
+
+// An unreadable transcript dir is reported in status.local_error.
+func TestLocalErrorInJSON(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("permission bits are not enforced here")
+	}
+	_, home := setup(t, nil)
+	locked := filepath.Join(home, ".claude", "projects", "locked")
+	os.MkdirAll(locked, 0o700)
+	os.Chmod(locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	out, _ := runCmd(t, "--sections", "local", "--format", "json")
+	var rep struct {
+		Status struct {
+			LocalError string `json:"local_error"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rep.Status.LocalError, "permission denied (") {
+		t.Errorf("local_error = %q", rep.Status.LocalError)
 	}
 }

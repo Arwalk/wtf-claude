@@ -37,7 +37,7 @@ With `--compact`:
 | pace        | For each limit with a known window (weekly = 7 days, session = 5 hours): how far usage is ahead of or behind an even pace, and, if the current average rate would hit 100% before the reset, when it runs out. No projection is made in the first 3% of a window. |
 | `breakdown` | The 7-day usage split by surface (Claude Code, chats, Cowork, ...), showing only surfaces above 0%. |
 | `spend`     | Extra (pay-as-you-go) usage, shown only when it is enabled: amount spent, the monthly limit and the percentage used. |
-| `local`     | Totals from Claude Code transcripts on this machine for **today** (local timezone) and the **current weekly window** (the subscription window when the API reports it, otherwise the last 7 days): total tokens (input + output + cache creation + cache read), output tokens, messages, sessions, and the top models by tokens. |
+| `local`     | Totals from Claude Code transcripts on this machine for **today** (local timezone) and the **current weekly window** (the subscription window when the API reports it, otherwise the last 7 days): total tokens (input + output + cache creation + cache read), output tokens, messages, sessions, and the top models by tokens. If transcripts can't be read and nothing could be counted, it says so instead of reporting no activity. |
 
 Limit labels: `weekly_all` is shown as *Weekly · all models*, `weekly_scoped`
 as *Weekly · \<model or surface\>*, and five-hour or session kinds as

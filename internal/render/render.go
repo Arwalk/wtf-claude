@@ -142,7 +142,7 @@ func (rd *renderer) full(r *report.Report) {
 		rd.spend(r.Spend)
 	}
 	if r.Local != nil && rd.trim < trimLocal {
-		rd.local(r.Local)
+		rd.local(r.Local, r.Status.LocalError)
 	}
 	if len(rd.lines) == 0 {
 		rd.add(line{{"nothing to show", dim}})
@@ -177,7 +177,7 @@ func (rd *renderer) compact(r *report.Report) {
 	}
 	rd.lines = append(rd.lines, note...)
 	if len(rd.lines) == 0 && r.Local != nil {
-		rd.local(r.Local)
+		rd.local(r.Local, r.Status.LocalError)
 	}
 	if len(rd.lines) == 0 {
 		rd.add(line{{"no usage data", dim}})
@@ -700,12 +700,16 @@ func (rd *renderer) spend(s *report.Spend) {
 	rd.add(line{{fitText(variants[len(variants)-1], rd.w), sevStyle(s.Severity)}})
 }
 
-func (rd *renderer) local(st *localstats.Stats) {
+func (rd *renderer) local(st *localstats.Stats, localErr string) {
 	if rd.trim < trimLocalHeader {
 		header := part{[]string{"Local Claude Code", "Local stats", "Local"}, dim | bold}
 		rd.add(line{{header.bestFit(rd.w), header.st}})
 	}
 	if st.Today.Messages == 0 && st.Week.Messages == 0 {
+		if localErr != "" {
+			rd.add(line{{fitText("local stats unavailable: "+localErr, rd.w), red}})
+			return
+		}
 		rd.add(line{{fitText("no activity in the last 7 days", rd.w), dim}})
 		return
 	}

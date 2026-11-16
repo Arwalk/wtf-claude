@@ -470,3 +470,19 @@ func TestHeightFitting(t *testing.T) {
 		t.Errorf("compact h=3:\n%s", got)
 	}
 }
+
+func TestLocalErrorShown(t *testing.T) {
+	r := report.Build(report.Input{Now: fixedNow, Local: &localstats.Stats{},
+		Status: report.Status{LocalError: "permission denied (/home/u/.claude/projects/p)"}})
+	got := renderString(t, r, Options{Width: 60, Loc: cet})
+	if !strings.Contains(got, "local stats unavailable: permission denied") || strings.Contains(got, "no activity") {
+		t.Errorf("want the error instead of 'no activity':\n%s", got)
+	}
+	// With data the stats are shown as usual (the error stays JSON-only).
+	r = report.Build(report.Input{Now: fixedNow, Local: sampleLocal(),
+		Status: report.Status{LocalError: "permission denied (/x)"}})
+	got = renderString(t, r, Options{Width: 60, Loc: cet})
+	if !strings.Contains(got, "Today") || strings.Contains(got, "unavailable") {
+		t.Errorf("partial error must not hide stats:\n%s", got)
+	}
+}

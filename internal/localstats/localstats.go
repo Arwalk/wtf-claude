@@ -114,6 +114,34 @@ type ScanResult struct {
 	LinesSkipped int
 }
 
+// ScanError is a transcript file or directory that could not be read. Its
+// message puts the reason before the path so it survives truncation in
+// narrow widgets.
+type ScanError struct {
+	Path string
+	Err  error
+}
+
+func (e *ScanError) Error() string {
+	reason := e.Err
+	var pe *fs.PathError
+	if errors.As(e.Err, &pe) {
+		reason = pe.Err // avoid repeating the path
+	}
+	return reason.Error() + " (" + e.Path + ")"
+}
+
+func (e *ScanError) Unwrap() error { return e.Err }
+
+// readErr wraps err as a *ScanError, or returns nil for errors that are
+// expected while Claude Code is writing (files or links that vanished).
+func readErr(path string, err error) error {
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return &ScanError{Path: path, Err: err}
+}
+
 // findFiles lists *.jsonl files under dirs modified at or after since, in
 // walk order. Symlinked files are judged by their target's mtime and
 // symlinked directories are followed (each real directory and file is
@@ -123,15 +151,25 @@ func findFiles(dirs []string, since time.Time) ([]string, error) {
 	visitedDirs := map[string]bool{}
 	seenFiles := map[string]bool{}
 	var walkErr error
+	note := func(path string, err error) {
+		if e := readErr(path, err); e != nil && walkErr == nil {
+			walkErr = e
+		}
+	}
 	var walk func(root string)
 	walk = func(root string) {
 		real, err := filepath.EvalSymlinks(root)
-		if err != nil || visitedDirs[real] {
+		if err != nil {
+			note(root, err)
+			return
+		}
+		if visitedDirs[real] {
 			return
 		}
 		visitedDirs[real] = true
 		err = filepath.WalkDir(real, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
+				note(path, err)
 				if d != nil && d.IsDir() && path != real {
 					return fs.SkipDir
 				}
@@ -153,6 +191,7 @@ func findFiles(dirs []string, since time.Time) ([]string, error) {
 				// own, a file is judged by its target's mtime.
 				info, err = os.Stat(path)
 				if err != nil {
+					note(path, err)
 					return nil
 				}
 				if info.IsDir() {
@@ -175,9 +214,7 @@ func findFiles(dirs []string, since time.Time) ([]string, error) {
 			}
 			return nil
 		})
-		if err != nil && walkErr == nil {
-			walkErr = err
-		}
+		note(real, err)
 	}
 	for _, dir := range dirs {
 		walk(dir)
@@ -190,6 +227,7 @@ type fileResult struct {
 	entries []keyedEntry
 	skipped int
 	ok      bool
+	err     error // open failure (already filtered through readErr)
 }
 
 type keyedEntry struct {
@@ -207,6 +245,10 @@ type keyedEntry struct {
 //
 // Files are parsed concurrently (JSON decoding dominates the cost) and
 // merged in walk order, so the result is the same as a sequential scan.
+//
+// The error, if any, is the first file or directory that could not be read
+// (a *ScanError); entries from everything that could be read are still
+// returned.
 func Scan(dirs []string, since time.Time) (ScanResult, error) {
 	var res ScanResult
 	files, walkErr := findFiles(dirs, since)
@@ -229,9 +271,13 @@ func Scan(dirs []string, since time.Time) (ScanResult, error) {
 	close(jobs)
 	wg.Wait()
 
+	firstErr := walkErr
 	byKey := map[string]int{}
 	for _, fr := range results {
 		if !fr.ok {
+			if firstErr == nil && fr.err != nil {
+				firstErr = fr.err
+			}
 			continue
 		}
 		res.FilesScanned++
@@ -251,13 +297,13 @@ func Scan(dirs []string, since time.Time) (ScanResult, error) {
 			res.Entries = append(res.Entries, ke.e)
 		}
 	}
-	return res, walkErr
+	return res, firstErr
 }
 
 func parseFile(path string, since time.Time) fileResult {
 	f, err := os.Open(path)
 	if err != nil {
-		return fileResult{}
+		return fileResult{err: readErr(path, err)}
 	}
 	defer f.Close()
 	var fr fileResult
