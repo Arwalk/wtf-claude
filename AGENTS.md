@@ -22,7 +22,10 @@ behaviour.
 - **Never refresh, write or log the OAuth token.** Refreshing rotates the
   refresh token and logs the user out of Claude Code. `internal/creds` is
   read-only; the token must never appear in output, errors, cache files or
-  cache file names (cache keys use a short hash).
+  cache file names (cache keys use a short hash). The only way a login gets
+  refreshed is the opt-in `--refresh-login`. It runs `claude -p`
+  (`internal/relogin`), so Claude Code refreshes its own token, and then
+  reads the credentials again.
 - **No third-party dependencies.** `go.mod` has no `require` block; use the
   standard library (`syscall` behind build tags is fine).
 - **No personal data.** Email and names from the profile endpoint are not
@@ -64,6 +67,7 @@ behaviour.
     internal/api/         HTTP client and tolerant parsing of usage/profile responses
     internal/creds/       read-only credential lookup (flag, env, keychain, file)
     internal/cache/       0600 on-disk response cache with stale fallback and back-off
+    internal/relogin/     --refresh-login: runs `claude -p` so Claude Code refreshes its login
     internal/localstats/  transcript scanning, de-duplication and aggregation
     internal/report/      normalized report model: labels, severity, pace, plan, spend
     internal/render/      width-aware ANSI/plain renderer and JSON output

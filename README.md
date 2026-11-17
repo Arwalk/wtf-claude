@@ -33,7 +33,7 @@ With `--compact`:
 | Section     | Contents |
 |-------------|----------|
 | `plan`      | Plan label and rate-limit tier, e.g. `Ultra plan · Max 20x`. A subscription status other than `active` is appended. Email and name are never shown. |
-| `limits`    | One row per rate-limit window: a bar showing the share **used**, the share **left** (rounded down, so `<1% left` until the limit is actually reached), and below it the reset countdown with the local wall-clock time. `▸` marks the limit that is binding right now. Colours follow the number shown: green above 30% left, yellow down to 10% left, red at 10% left or less, i.e. green below 70% used, yellow below 90%, red at 90% or more (a `warning`/`critical` severity from the API raises the colour). A limit whose value the API sent as null or unreadable shows `? left` with an empty grey bar and no pace. A limit whose reset time has already passed (stale cached data) shows `reset · refreshing` instead of its old percentage. |
+| `limits`    | One row per rate-limit window: a bar showing the share **used**, the share **left** (rounded down, so `<1% left` until the limit is actually reached), and below it the reset countdown with the local wall-clock time. `▸` marks the limit that is binding right now. Colours follow the number shown: green above 30% left, yellow down to 10% left, red at 10% left or less, i.e. green below 70% used, yellow below 90%, red at 90% or more (a `warning`/`critical` severity from the API raises the colour). A limit whose value the API sent as null or unreadable shows `? left` with an empty grey bar and no pace. A limit whose reset time has already passed (stale cached data) shows `reset` instead of its old percentage, with `reset · refreshing` below it; when the refresh failed, that line is left out. |
 | pace        | For each limit with a known window (weekly = 7 days, session = 5 hours): how far usage is ahead of or behind an even pace, and, if the current average rate would hit 100% before the reset, when it runs out. No projection is made in the first 3% of a window. |
 | `breakdown` | The 7-day usage split by surface (Claude Code, chats, Cowork, ...), showing only surfaces above 0%. |
 | `spend`     | Extra (pay-as-you-go) usage, shown only when it is enabled: amount spent, the monthly limit and the percentage used. |
@@ -87,6 +87,9 @@ claude-usage [flags]
   --config-dir DIR           Claude config dir (default $CLAUDE_CONFIG_DIR or ~/.claude)
   --cache-dir DIR            cache dir (default $XDG_CACHE_HOME/claude-usage
                              or ~/.cache/claude-usage)
+  --refresh-login            when the stored login is rejected (401), run
+                             `claude -p` so Claude Code refreshes it, then
+                             retry (see "How it works")
   --version
 ```
 
@@ -112,7 +115,9 @@ line of each limit, the surface breakdown, the local-stats header, all
 reset/pace lines, the local stats, and finally plan and extra usage. If it
 still does not fit, the compact view is used. The compact view keeps the
 binding limit and then the most used ones, plus the stale note when there is
-room, and shows `+N more` when it can spare a row for it.
+room, and shows `+N more` when it can spare a row for it. A login or access
+error (see "How it works") is always kept, as the first line, even when only
+one row is available.
 
 The exit status is 0 whenever something useful was printed, even if it was
 only local stats, stale data or a response with no limits. It is 1 when
@@ -223,8 +228,12 @@ scripts (fields are omitted when unknown):
     "usage_fetched_at": "...", "usage_from_cache": true,
     "stale": false,                  // refresh failed, cached data shown
     "usage_error": "...", "profile_error": "...", "local_error": "...",
+    "auth_error": true,              // usage_error needs you to act: login expired or
+                                     // rejected, 403, credentials missing/unreadable
     "credential_source": "/home/me/.claude/.credentials.json",
-    "no_limit_data": false
+    "no_limit_data": false,
+    "login_refreshed": true,         // --refresh-login renewed the login this run
+    "login_refresh_error": "..."     // why --refresh-login could not renew it
   }
 }
 ```
@@ -261,7 +270,38 @@ setups inject credentials through a proxy. On a 401 the tool says
 `token rejected (401)` instead). A 403 is reported as `access denied (403)`
 (missing scope, or a proxy/firewall denial), and a proxy that refuses the
 connection as `proxy refused (…)`. If the credentials are missing or
-unreadable, the last cached data is still shown, marked stale.
+unreadable, the last cached data is still shown.
+
+Retrying does not fix these errors (401, 403, missing or unreadable
+credentials), so they are not shown like a passing failure. Instead of the
+dim stale note, a red line comes first. It leads with the message and ends
+with the age of the data below it, for example
+`login expired · run claude · data 6d old`, so a narrow widget cuts the age,
+not the action. Without cached data, the message stands on its own line.
+
+**`--refresh-login`** (opt-in) lets Claude Code refresh the login for you.
+When a request with the stored token gets a 401, the tool runs this once,
+in a new empty temporary directory that is removed afterwards:
+
+    claude -p 'Reply with just: OK' --model haiku --tools '' \
+      --no-session-persistence --strict-mcp-config --disable-slash-commands \
+      --settings '{"disableAllHooks":true}'
+
+Claude Code refreshes its expired token before sending that request and
+stores the new one. The tool then reads the credentials again and retries
+with it. The tool still never touches the token itself. This costs one tiny
+Haiku request, about once per expired login, and takes a few seconds. No
+transcript is saved, so local stats don't count it. `claude` must be in
+`PATH`. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+`CLAUDE_CODE_OAUTH_TOKEN` are removed from its environment, so it uses the
+stored login. `CLAUDE_CONFIG_DIR` is set only for an explicit config dir.
+Tokens from `--token` or `CLAUDE_CODE_OAUTH_TOKEN` are never refreshed.
+The usage and plan requests share one attempt. Concurrent widgets take
+turns through a lock in the cache dir, and a later one uses the token the
+first one obtained. If the refresh fails (`claude` missing, timed out after
+60 s, or still logged out), the error stays `login expired · run claude`
+and no new attempt is made for 30 minutes. The reason is in
+`login_refresh_error` in the JSON output.
 
 **Caching.** Responses are cached in `$XDG_CACHE_HOME/claude-usage` (or
 `~/.cache/claude-usage`). Files there are mode 0600 and the directory is 0700.
@@ -324,6 +364,7 @@ cmd/claude-usage/     flags, orchestration, exit codes
 internal/api/         HTTP client and tolerant parsing of usage/profile responses
 internal/creds/       read-only credential lookup (flag, env, keychain, file)
 internal/cache/       0600 on-disk response cache with stale fallback and back-off
+internal/relogin/     --refresh-login: runs `claude -p` so Claude Code refreshes its login
 internal/localstats/  transcript scanning, de-duplication and aggregation
 internal/report/      normalized report model: labels, severity, pace, plan, spend
 internal/render/      width-aware ANSI/plain renderer and JSON output

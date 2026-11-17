@@ -106,6 +106,13 @@ func IsAuthError(err error) bool {
 	return errors.As(err, &he) && he.Status == http.StatusUnauthorized
 }
 
+// IsAccessError reports whether err is a 401 or 403 response: retrying will
+// not help until the user logs in again or fixes access.
+func IsAccessError(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden)
+}
+
 // RetryAfter returns the server-requested back-off for err, if any.
 func RetryAfter(err error) time.Duration {
 	var he *HTTPError

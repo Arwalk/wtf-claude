@@ -49,14 +49,23 @@ type Status struct {
 	// UsageFromCache is true when usage data came from the on-disk cache.
 	UsageFromCache bool `json:"usage_from_cache"`
 	// Stale is true when a refresh failed and older cached data is shown.
-	Stale        bool   `json:"stale"`
-	UsageError   string `json:"usage_error,omitempty"`
+	Stale      bool   `json:"stale"`
+	UsageError string `json:"usage_error,omitempty"`
+	// AuthError is true when UsageError needs the user to act: the login
+	// expired or was rejected (401), access was denied (403), or the
+	// credentials are missing or unreadable. Retrying will not fix it.
+	AuthError    bool   `json:"auth_error,omitempty"`
 	ProfileError string `json:"profile_error,omitempty"`
 	LocalError   string `json:"local_error,omitempty"`
 	// CredentialSource is "flag", "env", "keychain" or the credentials path.
 	CredentialSource string `json:"credential_source,omitempty"`
 	// NoLimitData is true when usage was fetched but contained no limits.
 	NoLimitData bool `json:"no_limit_data,omitempty"`
+	// LoginRefreshed is true when --refresh-login had Claude Code refresh
+	// a rejected login during this run.
+	LoginRefreshed bool `json:"login_refreshed,omitempty"`
+	// LoginRefreshError says why --refresh-login could not refresh it.
+	LoginRefreshError string `json:"login_refresh_error,omitempty"`
 }
 
 // Plan is the subscription plan.

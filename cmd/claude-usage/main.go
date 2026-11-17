@@ -21,6 +21,7 @@ import (
 	"claude-usage/internal/cache"
 	"claude-usage/internal/creds"
 	"claude-usage/internal/localstats"
+	"claude-usage/internal/relogin"
 	"claude-usage/internal/render"
 	"claude-usage/internal/report"
 )
@@ -46,6 +47,9 @@ type config struct {
 	cacheDir   string
 	baseURL    string
 	showVer    bool
+	// refreshLogin lets a 401 run `claude -p` so Claude Code refreshes its
+	// own login (see loginRefresher).
+	refreshLogin bool
 }
 
 // durationFlag accepts "120" (seconds) or Go durations like "2m".
@@ -91,6 +95,7 @@ func parseFlags(args []string, stderr io.Writer) (*config, error) {
 	fs.StringVar(&c.configDir, "config-dir", "", "Claude config dir (default: $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&c.cacheDir, "cache-dir", "", "cache dir (default: $XDG_CACHE_HOME/claude-usage or ~/.cache/claude-usage)")
 	fs.StringVar(&c.baseURL, "base-url", api.DefaultBaseURL, "API base URL")
+	fs.BoolVar(&c.refreshLogin, "refresh-login", false, "when the stored login is rejected, run `claude -p` (Haiku, one-word reply) so Claude Code refreshes it, then retry")
 	fs.BoolVar(&c.showVer, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: claude-usage [flags]\n\nShows remaining Claude subscription usage and local Claude Code statistics.\n\nFlags:\n")
@@ -304,6 +309,7 @@ func collect(c *config, e env) *report.Report {
 		cr, err := creds.Load(creds.Options{Token: c.token, ConfigDir: c.configDir})
 		if err != nil {
 			status.UsageError = shortErr(err)
+			status.AuthError = true
 			// The cache key of file/keychain credentials depends only on
 			// the config dir, so data fetched before the credentials went
 			// missing (logout, a rewrite in progress) can still be shown.
@@ -345,19 +351,53 @@ func collect(c *config, e env) *report.Report {
 			}
 			policy := func(ttl, backoff time.Duration, validate func([]byte) error) cache.Policy {
 				return cache.Policy{TTL: ttl, Backoff: backoff, RetryAfter: api.RetryAfter, Validate: validate,
-					Describe: describe, LockWait: c.timeout + 2*time.Second}
+					Describe: describe, IsAuth: api.IsAccessError, LockWait: c.timeout + 2*time.Second}
 			}
 			// The cache is keyed by config dir so different accounts
 			// (CLAUDE_CONFIG_DIR) don't share data.
 			suffix := cacheSuffix(configDir, explicitToken, cr.AccessToken)
+			var refresher *loginRefresher
+			if c.refreshLogin && cr.Source != "flag" && cr.Source != "env" {
+				// Only an explicit config dir is passed on: Claude Code
+				// treats a set CLAUDE_CONFIG_DIR as another account.
+				reloginDir := ""
+				if creds.ConfigDirExplicit(credOpts) {
+					reloginDir = configDir
+				}
+				refresher = &loginRefresher{
+					store: store, name: "relogin" + suffix, now: now,
+					load: func() (creds.Credentials, error) { return creds.Load(credOpts) },
+					run: func() error {
+						return relogin.Run(context.Background(), relogin.Options{ConfigDir: reloginDir, Timeout: reloginTimeout})
+					},
+				}
+			}
+			// get fetches path; with --refresh-login, a 401 gets the login
+			// refreshed and the request retried once with the new token.
+			get := func(path string) func() ([]byte, error) {
+				return func() ([]byte, error) {
+					body, err := client.Get(ctx, path)
+					if refresher == nil || !api.IsAuthError(err) {
+						return body, err
+					}
+					tok, rerr := refresher.refresh(cr.AccessToken)
+					if rerr != nil {
+						return body, err
+					}
+					// ctx may have expired while claude ran.
+					rctx, rcancel := context.WithTimeout(context.Background(), c.timeout+2*time.Second)
+					defer rcancel()
+					retry := *client
+					retry.Token = tok
+					return retry.Get(rctx, path)
+				}
+			}
 			var apiWG sync.WaitGroup
 			if needAPI {
 				apiWG.Add(1)
 				go func() {
 					defer apiWG.Done()
-					res := store.Get("usage"+suffix, now, policy(c.usageTTL, 30*time.Second, validateUsage), func() ([]byte, error) {
-						return client.Get(ctx, api.UsagePath)
-					})
+					res := store.Get("usage"+suffix, now, policy(c.usageTTL, 30*time.Second, validateUsage), get(api.UsagePath))
 					if res.Body != nil {
 						usage, _ = api.ParseUsage(res.Body)
 						t := res.FetchedAt
@@ -367,6 +407,7 @@ func collect(c *config, e env) *report.Report {
 					}
 					if res.Err != nil {
 						status.UsageError = errText(res.Err, describe)
+						status.AuthError = isAuthErr(res.Err)
 					}
 				}()
 			}
@@ -376,9 +417,7 @@ func collect(c *config, e env) *report.Report {
 					defer apiWG.Done()
 					// Plan data is optional (and some tokens lack the profile
 					// scope), so failures back off for longer.
-					res := store.Get("profile"+suffix, now, policy(c.profileTTL, 10*time.Minute, validateProfile), func() ([]byte, error) {
-						return client.Get(ctx, api.ProfilePath)
-					})
+					res := store.Get("profile"+suffix, now, policy(c.profileTTL, 10*time.Minute, validateProfile), get(api.ProfilePath))
 					if res.Body != nil {
 						profile, _ = api.ParseProfile(res.Body)
 					}
@@ -388,6 +427,13 @@ func collect(c *config, e env) *report.Report {
 				}()
 			}
 			apiWG.Wait()
+			if refresher != nil {
+				if tried, err := refresher.result(); tried && err != nil {
+					status.LoginRefreshError = err.Error()
+				} else if tried {
+					status.LoginRefreshed = true
+				}
+			}
 		}
 	}
 	wg.Wait()
@@ -438,6 +484,16 @@ func errText(err error, describe func(error) string) string {
 		return be.Error()
 	}
 	return describe(err)
+}
+
+// isAuthErr reports whether a fetch failed because of the login or access
+// rights, including a run in back-off after such a failure.
+func isAuthErr(err error) bool {
+	var be *cache.ErrBackoff
+	if errors.As(err, &be) {
+		return be.Auth
+	}
+	return api.IsAccessError(err)
 }
 
 func shortErr(err error) string {

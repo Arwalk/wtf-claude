@@ -11,7 +11,7 @@ import (
 )
 
 // lock takes an exclusive advisory lock on <dir>/<name>.lock, waiting up to
-// wait. It returns errLockTimeout if another process kept the lock, or
+// wait. It returns ErrLockTimeout if another process kept the lock, or
 // another error if locking is not possible (callers then proceed unlocked).
 func (s Store) lock(name string, wait time.Duration) (func(), error) {
 	if s.Dir == "" {
@@ -39,7 +39,7 @@ func (s Store) lock(name string, wait time.Duration) (func(), error) {
 		}
 		if time.Now().After(deadline) {
 			f.Close()
-			return nil, errLockTimeout
+			return nil, ErrLockTimeout
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

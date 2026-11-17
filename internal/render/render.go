@@ -83,7 +83,7 @@ func Lines(r *report.Report, opt Options) []string {
 	var lines []line
 	if !opt.Compact {
 		for trim := 0; trim <= maxTrim; trim++ {
-			rd := &renderer{opt: opt, now: r.GeneratedAt, w: opt.Width, trim: trim}
+			rd := &renderer{opt: opt, now: r.GeneratedAt, w: opt.Width, trim: trim, stale: r.Status.Stale}
 			rd.full(r)
 			lines = rd.lines
 			if opt.Height <= 0 || len(lines) <= opt.Height {
@@ -93,7 +93,7 @@ func Lines(r *report.Report, opt Options) []string {
 		}
 	}
 	if lines == nil {
-		rd := &renderer{opt: opt, now: r.GeneratedAt, w: opt.Width}
+		rd := &renderer{opt: opt, now: r.GeneratedAt, w: opt.Width, stale: r.Status.Stale}
 		rd.compact(r)
 		lines = rd.lines
 	}
@@ -111,6 +111,8 @@ type renderer struct {
 	lines []line
 	// trim is the detail-reduction level of the full layout (0 = all).
 	trim int
+	// stale is true when a refresh failed, so nothing is being refreshed.
+	stale bool
 }
 
 func (rd *renderer) add(l line) { rd.lines = append(rd.lines, l) }
@@ -130,11 +132,17 @@ func sevStyle(sev string) style {
 /* ----------------------------- full layout ----------------------------- */
 
 func (rd *renderer) full(r *report.Report) {
+	auth := authNote(r.Status)
+	if auth {
+		rd.status(r)
+	}
 	if r.Plan != nil && r.Plan.Display != "" && rd.trim < trimPlanSpend {
 		rd.add(line{{fitText(r.Plan.Display, rd.w), bold}})
 	}
 	rd.limits(r.Limits, false)
-	rd.status(r)
+	if !auth {
+		rd.status(r)
+	}
 	if r.Breakdown != nil && rd.trim < trimBreakdown {
 		rd.breakdown(r.Breakdown)
 	}
@@ -154,10 +162,13 @@ func (rd *renderer) compact(r *report.Report) {
 	rd.status(r)
 	note := rd.lines
 	rd.lines = nil
+	// An auth note comes first and is kept even with room for one line:
+	// the limits under it may be days old.
+	auth := authNote(r.Status)
 	hidden := 0
 	if h := rd.opt.Height; h > 0 {
 		budget := h
-		if len(note) > 0 && h >= 2 {
+		if len(note) > 0 && (h >= 2 || auth) {
 			budget--
 		} else {
 			note = nil
@@ -170,6 +181,10 @@ func (rd *renderer) compact(r *report.Report) {
 			hidden = len(ls) - keep
 			ls = mostImportant(ls, keep)
 		}
+	}
+	if auth {
+		rd.lines = append(rd.lines, note...)
+		note = nil
 	}
 	rd.limits(ls, true)
 	if hidden > 0 && len(rd.lines)+len(note) < rd.opt.Height {
@@ -484,6 +499,10 @@ func (p part) bestFit(avail int) string {
 // detailParts builds the reset / pace / run-out pieces for a limit.
 func (rd *renderer) detailParts(l report.Limit) (reset *part, pace []part) {
 	if l.Expired {
+		if rd.stale {
+			// The row already says "reset", and nothing is being refreshed.
+			return nil, nil
+		}
 		return &part{[]string{"reset · refreshing", "reset"}, dim}, nil
 	}
 	if l.ResetsAt != nil {
@@ -631,9 +650,20 @@ func (rd *renderer) details(l report.Limit, markerW int) {
 	}
 }
 
+// authNote reports whether the status note is an auth problem, which is
+// shown first and in red instead of as a dim stale note.
+func authNote(s report.Status) bool { return s.AuthError && s.UsageError != "" }
+
 func (rd *renderer) status(r *report.Report) {
 	s := r.Status
 	switch {
+	case authNote(s):
+		// The action leads, so it survives truncation in narrow widgets.
+		text := s.UsageError
+		if s.Stale && s.UsageFetchedAt != nil {
+			text += " · data " + Duration(rd.now.Sub(*s.UsageFetchedAt)) + " old"
+		}
+		rd.add(line{{fitText(text, rd.w), red}})
 	case s.Stale && s.UsageFetchedAt != nil:
 		ago := Duration(rd.now.Sub(*s.UsageFetchedAt))
 		text := fmt.Sprintf("stale · fetched %s ago", ago)

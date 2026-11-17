@@ -251,7 +251,7 @@ func TestNoCacheAuthError(t *testing.T) {
 	var calls, status int32 = 0, 401
 	srv, _ := setup(t, fixtureHandler(t, &calls, &status))
 	out, code := runCmd(t, "--base-url="+srv.URL, "--format", "plain", "--no-local", "--sections", "limits")
-	if code != 1 || !strings.Contains(out, "usage unavailable: login expired · run claude") {
+	if code != 1 || strings.TrimSpace(out) != "login expired · run claude" {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
 	if strings.Count(strings.TrimSpace(out), "\n") != 0 {
@@ -362,16 +362,166 @@ func TestAuthErrorWording(t *testing.T) {
 		w.WriteHeader(403)
 	})
 	out, _ := runCmd(t, "--base-url="+srv.URL, "--sections", "limits", "--color", "never")
-	if !strings.Contains(out, "usage unavailable: access denied (403)") {
+	if strings.TrimSpace(out) != "access denied (403)" {
 		t.Errorf("403: %q", out)
 	}
 	out, _ = runCmd(t, "--base-url="+srv.URL, "--sections", "limits", "--token", "handmade", "--color", "never")
-	if !strings.Contains(out, "usage unavailable: token rejected (401)") {
+	if strings.TrimSpace(out) != "token rejected (401)" {
 		t.Errorf("flag token 401: %q", out)
 	}
 }
 
-// Missing or unreadable credentials still show cached data (as stale).
+// With cached data, an auth failure leads the output instead of hiding at
+// the end of the stale note, also on runs in back-off that make no request.
+func TestAuthErrorWithCache(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, _ := setup(t, fixtureHandler(t, &calls, &status))
+	base := "--base-url=" + srv.URL
+	if _, code := runCmd(t, base, "--no-local"); code != 0 {
+		t.Fatal("warm-up failed")
+	}
+	atomic.StoreInt32(&status, 401)
+	out, code := runCmd(t, base, "--no-local", "--color", "never", "--cache-ttl", "0")
+	if code != 0 || !strings.HasPrefix(out, "login expired · run claude · data ") || !strings.Contains(out, "Weekly · Fable") || strings.Contains(out, "stale ·") {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+	before := atomic.LoadInt32(&calls)
+	r := runJSON(t, base, "--cache-ttl", "0")
+	if atomic.LoadInt32(&calls) != before {
+		t.Error("request made during back-off")
+	}
+	if !r.Status.AuthError || !r.Status.Stale || r.Status.UsageError != "login expired · run claude" || len(r.Limits) != 2 {
+		t.Errorf("in back-off: %+v", r.Status)
+	}
+}
+
+// fakeClaude puts a `claude` script on PATH that counts its runs and, if
+// newToken is set, stores it in the credentials file the way Claude Code
+// does when it refreshes its login. It returns the number of runs so far.
+func fakeClaude(t *testing.T, home, newToken string, exit int) func() int {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake claude is a shell script")
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "runs")
+	script := fmt.Sprintf("#!/bin/sh\necho run >> %q\n", log)
+	if newToken != "" {
+		script += fmt.Sprintf("printf '%%s' '{\"claudeAiOauth\":{\"accessToken\":\"%s\",\"expiresAt\":4102444800000}}' > %q\n",
+			newToken, filepath.Join(home, ".claude", ".credentials.json"))
+	}
+	script += fmt.Sprintf("exit %d\n", exit)
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMPDIR", t.TempDir())
+	return func() int {
+		b, _ := os.ReadFile(log)
+		return strings.Count(string(b), "run")
+	}
+}
+
+// expireLogin replaces the stored token with one the fake API rejects.
+func expireLogin(t *testing.T, home string) {
+	t.Helper()
+	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"),
+		[]byte(`{"claudeAiOauth":{"accessToken":"sk-test-OLD","expiresAt":1000000000000}}`), 0o600)
+}
+
+type statusJSON struct {
+	Limits []json.RawMessage `json:"limits"`
+	Status struct {
+		Stale             bool   `json:"stale"`
+		UsageError        string `json:"usage_error"`
+		AuthError         bool   `json:"auth_error"`
+		LoginRefreshed    bool   `json:"login_refreshed"`
+		LoginRefreshError string `json:"login_refresh_error"`
+	} `json:"status"`
+}
+
+func runJSON(t *testing.T, args ...string) statusJSON {
+	t.Helper()
+	out, _ := runCmd(t, append(args, "--format", "json", "--no-local")...)
+	var r statusJSON
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	return r
+}
+
+func TestRefreshLogin(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, home := setup(t, fixtureHandler(t, &calls, &status))
+	expireLogin(t, home)
+	runs := fakeClaude(t, home, "sk-test-SECRET", 0)
+
+	r := runJSON(t, "--base-url="+srv.URL, "--refresh-login")
+	if len(r.Limits) != 2 || r.Status.Stale || r.Status.UsageError != "" || !r.Status.LoginRefreshed || r.Status.LoginRefreshError != "" {
+		t.Errorf("after refresh: %+v", r)
+	}
+	// Usage and profile were both rejected, but claude ran only once.
+	if n := runs(); n != 1 {
+		t.Errorf("claude ran %d times, want 1", n)
+	}
+	if left, _ := os.ReadDir(os.Getenv("TMPDIR")); len(left) != 0 {
+		t.Errorf("temp dir left behind: %v", left)
+	}
+}
+
+func TestRefreshLoginIsOptIn(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, home := setup(t, fixtureHandler(t, &calls, &status))
+	expireLogin(t, home)
+	runs := fakeClaude(t, home, "sk-test-SECRET", 0)
+	base := "--base-url=" + srv.URL
+
+	if r := runJSON(t, base); r.Status.UsageError != "login expired · run claude" || r.Status.LoginRefreshed {
+		t.Errorf("without the flag: %+v", r)
+	}
+	// Claude Code cannot refresh a token passed in by hand.
+	if r := runJSON(t, base, "--refresh-login", "--token", "handmade"); r.Status.UsageError != "token rejected (401)" {
+		t.Errorf("--token: %+v", r)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "from-env")
+	if r := runJSON(t, base, "--refresh-login"); r.Status.UsageError != "token rejected (401)" {
+		t.Errorf("env token: %+v", r)
+	}
+	if n := runs(); n != 0 {
+		t.Errorf("claude ran %d times, want 0", n)
+	}
+}
+
+// A refresh that fails is not retried on every run.
+func TestRefreshLoginBackoff(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, home := setup(t, fixtureHandler(t, &calls, &status))
+	expireLogin(t, home)
+	runs := fakeClaude(t, home, "", 1)
+	base := "--base-url=" + srv.URL
+
+	r := runJSON(t, base, "--refresh-login")
+	if r.Status.UsageError != "login expired · run claude" || r.Status.LoginRefreshError != "claude failed (exit 1)" || r.Status.LoginRefreshed {
+		t.Errorf("first run: %+v", r)
+	}
+	// Drop the API back-off so the next run requests (and is rejected) again.
+	for _, name := range []string{"usage.json", "profile.json"} {
+		os.Remove(filepath.Join(home, "cache", "claude-usage", name))
+	}
+	before := atomic.LoadInt32(&calls)
+	r = runJSON(t, base, "--refresh-login")
+	if atomic.LoadInt32(&calls) == before {
+		t.Fatal("second run made no request")
+	}
+	if r.Status.UsageError != "login expired · run claude" || r.Status.LoginRefreshError != "claude failed (exit 1)" {
+		t.Errorf("second run: %+v", r)
+	}
+	if n := runs(); n != 1 {
+		t.Errorf("claude ran %d times, want 1", n)
+	}
+}
+
+// Missing or unreadable credentials still show cached data, under the
+// credential error.
 func TestCredentialErrorUsesCache(t *testing.T) {
 	var calls, status int32 = 0, 200
 	srv, home := setup(t, fixtureHandler(t, &calls, &status))
@@ -392,7 +542,9 @@ func TestCredentialErrorUsesCache(t *testing.T) {
 		step.mutate()
 		before := atomic.LoadInt32(&calls)
 		out, code := runCmd(t, base, "--no-local", "--color", "never")
-		if code != 0 || !strings.Contains(out, "Weekly · Fable") || !strings.Contains(out, "Ultra plan") || !strings.Contains(out, "stale · fetched") {
+		first := strings.SplitN(out, "\n", 2)[0]
+		if code != 0 || !strings.Contains(out, "Weekly · Fable") || !strings.Contains(out, "Ultra plan") ||
+			!(strings.Contains(first, "credentials") || strings.Contains(first, "not logged in")) {
 			t.Errorf("%s: exit %d:\n%s", name, code, out)
 		}
 		if atomic.LoadInt32(&calls) != before {
@@ -400,7 +552,7 @@ func TestCredentialErrorUsesCache(t *testing.T) {
 		}
 	}
 	out, _ := runCmd(t, base, "--no-local", "--color", "never")
-	if !strings.Contains(out, "not logged in · run claude") {
+	if !strings.HasPrefix(out, "not logged in · run claude · data ") {
 		t.Errorf("reason missing:\n%s", out)
 	}
 }

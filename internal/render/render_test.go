@@ -193,6 +193,52 @@ func TestStaleAndErrorNotes(t *testing.T) {
 	}
 }
 
+// An auth problem is not a passing failure: retrying won't fix it, and the
+// data under it can be days old. It comes first, in red, and leads with the
+// action, so narrow widgets keep the part that matters.
+func TestAuthErrorNote(t *testing.T) {
+	r := fixtureReport(t)
+	fetched := fixedNow.Add(-6 * 24 * time.Hour)
+	r.Status = report.Status{Stale: true, UsageFetchedAt: &fetched, UsageError: "login expired · run claude", AuthError: true}
+
+	got := splitLines(renderString(t, r, Options{Width: 60, Loc: cet}))
+	if got[0] != "login expired · run claude · data 6d old" {
+		t.Errorf("first line = %q", got[0])
+	}
+	if ansi := renderString(t, r, Options{Width: 60, Color: true, Loc: cet}); !strings.HasPrefix(ansi, "\x1b[31mlogin expired") {
+		t.Errorf("not red: %q", ansi[:min(40, len(ansi))])
+	}
+	for _, w := range []int{38, 28} {
+		for _, compact := range []bool{false, true} {
+			got := splitLines(renderString(t, r, Options{Width: w, Compact: compact, Loc: cet}))
+			if !strings.HasPrefix(got[0], "login expired · run claude") {
+				t.Errorf("w=%d compact=%v: first line %q", w, compact, got[0])
+			}
+			if joined := strings.Join(got, "\n"); strings.Contains(joined, "stale ·") || strings.Count(joined, "login expired") != 1 {
+				t.Errorf("w=%d compact=%v: one auth line only:\n%s", w, compact, joined)
+			}
+		}
+	}
+
+	// Kept even with room for a single line.
+	for _, compact := range []bool{false, true} {
+		got := splitLines(renderString(t, r, Options{Width: 40, Height: 1, Compact: compact, Loc: cet}))
+		if len(got) != 1 || !strings.HasPrefix(got[0], "login expired") {
+			t.Errorf("h=1 compact=%v: %q", compact, got)
+		}
+	}
+	got = splitLines(renderString(t, r, Options{Width: 40, Height: 2, Compact: true, Loc: cet}))
+	if len(got) != 2 || !strings.HasPrefix(got[0], "login expired") || !strings.Contains(got[1], "▸") {
+		t.Errorf("h=2: %q", got)
+	}
+
+	// Without cached data the message stands alone, action first.
+	empty := report.Build(report.Input{Now: fixedNow, Status: report.Status{UsageError: "login expired · run claude", AuthError: true}})
+	if got := strings.TrimSpace(renderString(t, empty, Options{Width: 38, Loc: cet})); got != "login expired · run claude" {
+		t.Errorf("no data: %q", got)
+	}
+}
+
 func TestNoLimits(t *testing.T) {
 	u, _ := api.ParseUsage([]byte(`{"limits":[],"five_hour":null}`))
 	r := report.Build(report.Input{Now: fixedNow, Usage: u})
@@ -318,6 +364,13 @@ func TestExpiredLimitRendering(t *testing.T) {
 		if !compact && !strings.Contains(got, "reset · refreshing") {
 			t.Errorf("missing refresh note:\n%s", got)
 		}
+	}
+	// When the refresh failed, nothing is being refreshed: the rows say
+	// "reset" and there is no detail line.
+	r.Status.Stale = true
+	got := renderString(t, r, Options{Width: 60, Loc: cet})
+	if strings.Contains(got, "refreshing") || strings.Count(got, "reset") != 2 || len(splitLines(got)) != 2 {
+		t.Errorf("stale data claims a refresh:\n%s", got)
 	}
 }
 

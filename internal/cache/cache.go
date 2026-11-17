@@ -18,6 +18,9 @@ type Entry struct {
 	Body        json.RawMessage `json:"body,omitempty"`
 	LastErrorAt time.Time       `json:"last_error_at,omitempty"`
 	LastError   string          `json:"last_error,omitempty"`
+	// LastErrorAuth records that Policy.IsAuth matched the last error, so
+	// runs in back-off can still say it was an auth error.
+	LastErrorAuth bool `json:"last_error_auth,omitempty"`
 	// RetryNotBefore suppresses network attempts until this time after a
 	// failure (honouring Retry-After), so many widgets do not hammer a
 	// rate-limited API.
@@ -120,14 +123,20 @@ type Policy struct {
 	// Describe turns an error into the short message remembered for
 	// back-off reporting. Defaults to err.Error().
 	Describe func(error) string
+	// IsAuth, if set, reports whether an error is an auth error; the answer
+	// is remembered for back-off reporting (ErrBackoff.Auth).
+	IsAuth func(error) bool
 	// LockWait is how long to wait for another process that is refreshing
 	// the same entry. Zero means 5s.
 	LockWait time.Duration
 }
 
 // ErrBackoff is reported when a fetch was skipped because a recent attempt
-// failed.
-type ErrBackoff struct{ Last string }
+// failed. Auth is true when that failure was an auth error (Policy.IsAuth).
+type ErrBackoff struct {
+	Last string
+	Auth bool
+}
 
 func (e *ErrBackoff) Error() string {
 	if e.Last != "" {
@@ -152,7 +161,7 @@ func fromDisk(e Entry, now time.Time, p Policy) (Result, bool) {
 		return Result{Body: e.Body, FetchedAt: e.FetchedAt, FromCache: true}, true
 	}
 	if !e.RetryNotBefore.IsZero() && now.Before(e.RetryNotBefore) {
-		err := &ErrBackoff{Last: e.LastError}
+		err := &ErrBackoff{Last: e.LastError, Auth: e.LastErrorAuth}
 		if e.HasBody() {
 			return Result{Body: e.Body, FetchedAt: e.FetchedAt, FromCache: true, Stale: true, Err: err}, true
 		}
@@ -183,7 +192,7 @@ func (s Store) Get(name string, now time.Time, p Policy, fetch func() ([]byte, e
 		if r, ok := fromDisk(e, now, p); ok {
 			return r
 		}
-	} else if errors.Is(err, errLockTimeout) && e.HasBody() {
+	} else if errors.Is(err, ErrLockTimeout) && e.HasBody() {
 		return Result{Body: e.Body, FetchedAt: e.FetchedAt, FromCache: true, Stale: true, Err: ErrBusy}
 	}
 
@@ -220,6 +229,7 @@ func (s Store) Get(name string, now time.Time, p Policy, fetch func() ([]byte, e
 	} else {
 		e.LastError = err.Error()
 	}
+	e.LastErrorAuth = p.IsAuth != nil && p.IsAuth(err)
 	e.RetryNotBefore = now.Add(backoff)
 	_ = s.Save(name, e)
 	if e.HasBody() {
@@ -228,4 +238,13 @@ func (s Store) Get(name string, now time.Time, p Policy, fetch func() ([]byte, e
 	return Result{Err: err}
 }
 
-var errLockTimeout = errors.New("cache: timed out waiting for lock")
+// ErrLockTimeout is returned by Lock when another process kept the lock.
+var ErrLockTimeout = errors.New("cache: timed out waiting for lock")
+
+// Lock takes the same cross-process lock Get takes while refreshing name,
+// waiting up to wait. It returns ErrLockTimeout if another process kept it,
+// or another error if locking is not possible here (callers then proceed
+// unlocked).
+func (s Store) Lock(name string, wait time.Duration) (unlock func(), err error) {
+	return s.lock(name, wait)
+}
