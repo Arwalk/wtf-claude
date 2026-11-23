@@ -142,8 +142,32 @@ func setup(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
 	return srv, home
 }
 
+// currentFixture returns testdata/usage.json with its recorded weekly window
+// moved to one that is running now: run() uses the real clock, so the
+// recorded dates would look like an expired window.
+func currentFixture(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile("../../testdata/usage.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const layout = "2006-01-02T15:04:05"
+	start := time.Now().UTC().AddDate(0, 0, -2)
+	s := string(b)
+	for recorded, current := range map[string]time.Time{
+		"2026-11-15T10:00:00": start,                  // window start
+		"2026-11-22T10:00:00": start.AddDate(0, 0, 7), // reset
+	} {
+		if !strings.Contains(s, recorded) {
+			t.Fatalf("testdata/usage.json: no %s, update currentFixture", recorded)
+		}
+		s = strings.ReplaceAll(s, recorded, current.Format(layout))
+	}
+	return []byte(s)
+}
+
 func fixtureHandler(t *testing.T, calls *int32, status *int32) http.HandlerFunc {
-	usage, _ := os.ReadFile("../../testdata/usage.json")
+	usage := currentFixture(t)
 	profile, _ := os.ReadFile("../../testdata/profile.json")
 	return func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(calls, 1)
