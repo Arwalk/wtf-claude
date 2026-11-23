@@ -20,10 +20,25 @@ windows/darwin/freebsd clean.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| [001](001-terminal-width-detection.md) | Size output to the real terminal in a plain terminal | P1 | S | — | TODO |
-| [002](002-surface-local-scan-errors.md) | Report unreadable transcripts instead of "no activity" | P1 | S | — (run after 001: shared test file) | TODO |
-| [003](003-text-hygiene-at-output-boundaries.md) | Strip terminal control chars; UTF-8-safe string cuts | P2 | S | — (run after 001/002: shared test files) | TODO |
-| [004](004-agents-md.md) | Add AGENTS.md / CLAUDE.md with repo invariants | P3 | S | best after 001-003 | TODO |
+| [001](001-terminal-width-detection.md) | Size output to the real terminal in a plain terminal | P1 | S | — | DONE: `advisor/001-terminal-width` |
+| [002](002-surface-local-scan-errors.md) | Report unreadable transcripts instead of "no activity" | P1 | S | — (run after 001: shared test file) | DONE: `advisor/002-local-scan-errors` |
+| [003](003-text-hygiene-at-output-boundaries.md) | Strip terminal control chars; UTF-8-safe string cuts | P2 | S | — (run after 001/002: shared test files) | DONE: `advisor/003-text-hygiene` |
+| [004](004-agents-md.md) | Add AGENTS.md / CLAUDE.md with repo invariants | P3 | S | best after 001-003 | DONE: `advisor/004-agents-md` (1 revision) |
+
+All four branches are stacked: `main` → 001 → 002 → 003 → 004.
+Merging `advisor/004-agents-md` into `main` lands everything. Not merged yet;
+merging is the maintainer's call.
+
+Follow-ups from review (minor, not blocking):
+- 001: a maintainer on macOS should check the terminal width live in a
+  terminal narrower than 60 columns. Linux was checked in a pty (40 cols →
+  37-cell lines). No test covers the `run()` wiring or the errno branch,
+  because a pty dependency would be needed.
+- 002: no test covers the compact-mode call site
+  (`rd.local(r.Local, r.Status.LocalError)` in `compact`). Passing `""`
+  there breaks no test.
+- 003: the injected `ShortLabel` in `TestUntrustedTextIsSanitized` never
+  renders at width 60, so that one injection point goes untested.
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
