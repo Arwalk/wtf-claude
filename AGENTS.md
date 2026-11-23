@@ -28,8 +28,14 @@ behaviour.
   reads the credentials again.
 - **No third-party dependencies.** `go.mod` has no `require` block; use the
   standard library (`syscall` behind build tags is fine).
+- **The token goes only to the configured server over a safe channel.**
+  `--base-url` must be https, or http to loopback (`checkBaseURL`), and
+  `api.Client` never follows redirects. Errors about the command line are
+  redacted and never quote positional arguments: one of them may be the token.
 - **No personal data.** Email and names from the profile endpoint are not
-  parsed. Fixtures in `testdata/` must be scrubbed before committing.
+  parsed, and `api.TrimProfile` drops them before anything is cached.
+  Fixtures in `testdata/` must be scrubbed before committing, including ids
+  and account timestamps.
 - **Tolerant parsing.** The usage/profile endpoints are undocumented. Only a
   non-object body is an error; every field may be null, missing or the wrong
   type (use the `flex*` types in `internal/api/flex.go`).
@@ -57,6 +63,8 @@ behaviour.
   "only an error" case exits 0 instead, because the message is the widget's
   content; invalid flags still exit 2 but are also printed to stdout, since
   cmdrunner discards stderr. See README "Usage".
+- `run()` uses the real clock, so no test may depend on a date in a fixture
+  still being in the future (see `currentFixture`).
 - Tests isolate themselves with `t.TempDir()`, `t.Setenv("HOME", …)` and
   `httptest` servers (see `setup` in `cmd/claude-usage/main_test.go`); new
   tests must not depend on the real `~/.claude` or the network.

@@ -96,6 +96,9 @@ claude-usage [flags]
   --refresh-login            when the stored login is rejected (401), run
                              `claude -p` so Claude Code refreshes it, then
                              retry (see "How it works")
+  --base-url URL             API server, for testing or a proxy; it receives
+                             your token, so it must be https, or http to
+                             localhost (default https://api.anthropic.com)
   --version
 ```
 
@@ -265,7 +268,11 @@ token (`Authorization: Bearer …`, `anthropic-beta: oauth-2025-04-20`).
 4. `<config dir>/.credentials.json` (`$CLAUDE_CONFIG_DIR`, `--config-dir`, or
    `~/.claude`)
 
-The token is never printed, logged or cached.
+The token is never printed, logged or cached. It is sent only to
+`https://api.anthropic.com` (or `--base-url`), and redirects are never
+followed. Prefer the stored login to `--token`: command-line arguments are
+visible to other users of the machine (`ps`), and end up in shell history and
+in any wtfutil config you share.
 
 **Tokens are never refreshed.** Refreshing an OAuth token rotates the refresh
 token, which would log Claude Code out, so this tool only reads credentials.
@@ -311,6 +318,10 @@ and no new attempt is made for 30 minutes. The reason is in
 
 **Caching.** Responses are cached in `$XDG_CACHE_HOME/claude-usage` (or
 `~/.cache/claude-usage`). Files there are mode 0600 and the directory is 0700.
+Of the plan response only the fields shown under `plan` (plan name, tier,
+status and similar) are stored. The email, names and ids in it are dropped
+first, and removed from caches written by older versions. Cached data is kept
+after you log out; delete the directory to remove it.
 Usage data is cached for 120 s and plan data for 1 h. When a refresh fails
 (network error, timeout, 429 or 5xx), the last good data is shown with a dim
 `stale · fetched 12m ago · <reason>` line. After a failure, the tool waits 30 s
@@ -320,7 +331,8 @@ cache entry, so when several widgets refresh at once only one request is
 made and the others read its result. If there is no cached data at all, a
 one-line error is shown and the local stats are still rendered. Requests time
 out after 10 s and send `User-Agent: claude-usage/<version>`. A non-default
-`CLAUDE_CONFIG_DIR`, or an explicitly passed token, gets its own cache files.
+`CLAUDE_CONFIG_DIR` or `--base-url`, or an explicitly passed token, gets its
+own cache files.
 
 **Local stats** come from Claude Code transcripts in `~/.claude/projects`
 and `~/.config/claude/projects`, including subagent transcripts. When a

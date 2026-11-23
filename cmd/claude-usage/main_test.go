@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Arwalk/wtf-claude/internal/api"
+	"github.com/Arwalk/wtf-claude/internal/cache"
 )
 
 func fakeEnv(m map[string]string, tty bool) env {
@@ -190,6 +193,13 @@ func fixtureHandler(t *testing.T, calls *int32, status *int32) http.HandlerFunc 
 	}
 }
 
+// cacheFiles lists the cache entries for name; their full names depend on
+// the test server's URL.
+func cacheFiles(home, name string) []string {
+	files, _ := filepath.Glob(filepath.Join(home, "cache", "claude-usage", name+"*.json"))
+	return files
+}
+
 func runCmd(t *testing.T, args ...string) (string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
@@ -220,8 +230,12 @@ func TestEndToEnd(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("calls = %d, want 2", calls)
 	}
-	fi, err := os.Stat(filepath.Join(home, "cache", "claude-usage", "usage.json"))
-	if err != nil || fi.Mode().Perm() != 0o600 {
+	files := cacheFiles(home, "usage")
+	if len(files) != 1 {
+		t.Fatalf("cache files: %v", files)
+	}
+	fi, err := os.Stat(files[0])
+	if err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("cache file: %v %v", fi, err)
 	}
 
@@ -528,8 +542,8 @@ func TestRefreshLoginBackoff(t *testing.T) {
 		t.Errorf("first run: %+v", r)
 	}
 	// Drop the API back-off so the next run requests (and is rejected) again.
-	for _, name := range []string{"usage.json", "profile.json"} {
-		os.Remove(filepath.Join(home, "cache", "claude-usage", name))
+	for _, f := range append(cacheFiles(home, "usage"), cacheFiles(home, "profile")...) {
+		os.Remove(f)
 	}
 	before := atomic.LoadInt32(&calls)
 	r = runJSON(t, base, "--refresh-login")
@@ -698,5 +712,190 @@ func TestShortErrKeepsUTF8(t *testing.T) {
 	got := shortErr(errors.New(strings.Repeat("é", 100))) // 200 bytes
 	if !utf8.ValidString(got) || len(got) > 120 || !strings.HasSuffix(got, "...") {
 		t.Errorf("shortErr = %q (%d bytes)", got, len(got))
+	}
+}
+
+// A mistyped command line must not put the token on screen: cmdrunner shows
+// stdout, and stderr often ends up in logs.
+func TestFlagErrorsNeverEchoToken(t *testing.T) {
+	setup(t, nil) // an accepted command line would run for real
+	t.Setenv("WTF_WIDGET_WIDTH", "60")
+	for _, args := range [][]string{
+		{"--token", "=", "oat01-SECRET"},
+		{"--token=", "oat01-SECRET"},
+		{"---token=sk-ant-oat01-SECRET"},
+		{"--tokensk-ant-oat01-SECRET"},
+		{"--width", "sk-ant-oat01-SECRET"},
+		{"--cache-ttl", "sk-ant-oat01-SECRET"},
+		{"--format", "sk-ant-oat01-SECRET"},
+		{"--sections", "sk-ant-oat01-SECRET"},
+		{"--sections", "plan", "--format", "x-sk-ant-oat01-SECRET"},
+		{"--base-url", "https://user:oat01-SECRET@"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 2 {
+			t.Errorf("%q: exit %d, want 2", args, code)
+		}
+		if strings.Contains(out.String()+errb.String(), "SECRET") {
+			t.Errorf("%q echoed the token:\nstdout: %s\nstderr: %.200s", args, out.String(), errb.String())
+		}
+		if !strings.Contains(out.String(), "claude-usage: ") {
+			t.Errorf("%q: no message in the widget: %q", args, out.String())
+		}
+	}
+}
+
+// The token goes to whatever --base-url names, so it must never travel
+// unencrypted to another machine.
+func TestBaseURLNeedsHTTPSOrLoopback(t *testing.T) {
+	for _, bad := range []string{
+		"http://api.example.invalid", "http://10.0.0.1", "http://127.0.0.1.example.invalid",
+		"http://localhost.example.invalid", "http://127.0.0.1@api.example.invalid",
+		"ftp://127.0.0.1", "api.example.invalid", "https://", "http://", "https://api.example.invalid:port", "://",
+	} {
+		var stderr bytes.Buffer
+		if _, err := parseFlags([]string{"--base-url", bad}, &stderr); err == nil || !strings.Contains(err.Error(), "--base-url") {
+			t.Errorf("%q: err = %v, want a --base-url error", bad, err)
+		}
+	}
+	for _, ok := range []string{
+		"https://api.anthropic.com", "HTTPS://api.example.invalid:8443/prefix/", "http://127.0.0.1:8080",
+		"http://127.9.9.9", "http://localhost:8080", "http://[::1]:8080",
+	} {
+		var stderr bytes.Buffer
+		if c, err := parseFlags([]string{"--base-url", ok}, &stderr); err != nil || c.baseURL != ok {
+			t.Errorf("%q: %+v, %v", ok, c, err)
+		}
+	}
+}
+
+// Data fetched from another --base-url is never shown as the real thing.
+func TestCacheIsPerBaseURL(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, _ := setup(t, fixtureHandler(t, &calls, &status))
+	if r := runJSON(t, "--base-url="+srv.URL); len(r.Limits) != 2 {
+		t.Fatalf("warm-up: %+v", r)
+	}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer other.Close()
+	if r := runJSON(t, "--base-url="+other.URL); len(r.Limits) != 0 {
+		t.Errorf("limits from another server were shown: %+v", r)
+	}
+	before := atomic.LoadInt32(&calls)
+	if r := runJSON(t, "--base-url="+srv.URL+"/"); len(r.Limits) != 2 || atomic.LoadInt32(&calls) != before {
+		t.Errorf("trailing slash missed the cache: %+v", r)
+	}
+}
+
+func TestHelpShowsRefreshLoginAsSwitch(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--help"}, &out, &errb); code != 0 {
+		t.Errorf("exit %d", code)
+	}
+	if !strings.Contains(errb.String(), "-refresh-login\n") {
+		t.Errorf("--refresh-login looks like it takes a value:\n%s", errb.String())
+	}
+}
+
+// personalFixtureData is what testdata/profile.json says about the account
+// holder; none of it may reach the disk.
+var personalFixtureData = []string{"user@example.com", "Example User", "Example Org", "00000000-0000-4000-8000", "created_at", "invoice"}
+
+func cacheContents(t *testing.T, dir string) string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(dir, "*"))
+	var all strings.Builder
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(b)
+	}
+	return all.String()
+}
+
+func TestProfileCacheHoldsNoPersonalData(t *testing.T) {
+	var calls, status int32 = 0, 200
+	srv, home := setup(t, fixtureHandler(t, &calls, &status))
+	args := []string{"--base-url=" + srv.URL, "--no-local", "--format", "plain", "--sections", "plan"}
+	first, _ := runCmd(t, args...)
+	cached := cacheContents(t, filepath.Join(home, "cache", "claude-usage"))
+	if !strings.Contains(cached, "default_claude_max_20x") {
+		t.Fatalf("profile was not cached:\n%s", cached)
+	}
+	for _, s := range personalFixtureData {
+		if strings.Contains(cached, s) {
+			t.Errorf("cache contains %q", s)
+		}
+	}
+	second, _ := runCmd(t, args...)
+	if calls != 1 || second != first || !strings.Contains(second, "Ultra plan · Max 20x") {
+		t.Errorf("from cache (%d calls): %q, first run: %q", calls, second, first)
+	}
+}
+
+// Caches written by versions that stored the whole profile are cleaned up,
+// for every account, without losing the plan.
+func TestOldProfileCachesAreScrubbed(t *testing.T) {
+	var calls, status int32 = 0, 503
+	srv, home := setup(t, fixtureHandler(t, &calls, &status))
+	profile, err := os.ReadFile("../../testdata/profile.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "cache", "claude-usage")
+	store := cache.Store{Dir: dir}
+	old := cache.Entry{FetchedAt: time.Now().Add(-48 * time.Hour), Body: profile, LastError: "kept"}
+	for _, name := range []string{"profile", "profile-0badf00d"} {
+		if err := store.Save(name, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not one of ours: left alone.
+	foreign := filepath.Join(dir, "profile-notes.json")
+	os.WriteFile(foreign, []byte(`{"email":"mine"}`), 0o600)
+
+	runCmd(t, "--base-url="+srv.URL, "--no-local", "--format", "plain", "--compact")
+	for _, name := range []string{"profile", "profile-0badf00d"} {
+		b, _ := os.ReadFile(filepath.Join(dir, name+".json"))
+		for _, s := range personalFixtureData {
+			if strings.Contains(string(b), s) {
+				t.Errorf("%s still contains %q", name, s)
+			}
+		}
+		e := store.Load(name)
+		if !e.FetchedAt.Equal(old.FetchedAt) || e.LastError != "kept" || !strings.Contains(string(e.Body), "default_claude_max_20x") {
+			t.Errorf("%s lost data: %+v", name, e)
+		}
+	}
+	if b, _ := os.ReadFile(foreign); string(b) != `{"email":"mine"}` {
+		t.Errorf("foreign file changed: %s", b)
+	}
+}
+
+// Only another account or server changes the cache file names.
+func TestCacheSuffix(t *testing.T) {
+	_, home := setup(t, nil)
+	def := filepath.Join(home, ".claude")
+	for _, base := range []string{api.DefaultBaseURL, api.DefaultBaseURL + "/"} {
+		if s := cacheSuffix(def, false, "", base); s != "" {
+			t.Errorf("default dir on %s: %q, want none", base, s)
+		}
+	}
+	seen := map[string]string{"": "default"}
+	for name, s := range map[string]string{
+		"other dir":          cacheSuffix("/work", false, "", api.DefaultBaseURL),
+		"token":              cacheSuffix(def, true, "t", api.DefaultBaseURL),
+		"other token":        cacheSuffix(def, true, "u", api.DefaultBaseURL),
+		"other server":       cacheSuffix(def, false, "", "https://a.example.invalid"),
+		"third server":       cacheSuffix(def, false, "", "https://b.example.invalid"),
+		"other dir + server": cacheSuffix("/work", false, "", "https://a.example.invalid"),
+		"token + server":     cacheSuffix(def, true, "t", "https://a.example.invalid"),
+	} {
+		if prev, dup := seen[s]; dup || len(s) != 9 {
+			t.Errorf("%s: suffix %q (same as %s)", name, s, prev)
+		}
+		seen[s] = name
 	}
 }

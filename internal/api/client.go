@@ -68,7 +68,11 @@ func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 10 * time.Second}
 	}
-	resp, err := hc.Do(req)
+	// Following a redirect would send the token along, even from https to
+	// plain http on the same host. The endpoints have no need for them.
+	noRedirect := *hc
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +144,8 @@ func Describe(err error) string {
 			return "access denied (403)"
 		case he.Status == http.StatusTooManyRequests:
 			return "rate limited (429)"
+		case he.Status >= 300 && he.Status <= 399:
+			return fmt.Sprintf("redirect refused (%d)", he.Status)
 		case he.Status >= 500:
 			return fmt.Sprintf("server error (%d)", he.Status)
 		default:

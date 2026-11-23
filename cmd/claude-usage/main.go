@@ -9,8 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,7 +82,9 @@ func (f durationFlag) Set(s string) error {
 func parseFlags(args []string, stderr io.Writer) (*config, error) {
 	c := &config{usageTTL: 120 * time.Second, profileTTL: time.Hour, timeout: 10 * time.Second}
 	fs := flag.NewFlagSet("claude-usage", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	// The flag package prints its own errors, which quote the arguments;
+	// run prints them instead, redacted.
+	fs.SetOutput(io.Discard)
 	sections := strings.Join(allSections, ",")
 	fs.StringVar(&c.format, "format", "ansi", "output format: ansi, plain or json")
 	fs.StringVar(&c.color, "color", "auto", "colour: auto, always or never (auto = TTY or inside wtfutil; NO_COLOR respected)")
@@ -94,18 +99,23 @@ func parseFlags(args []string, stderr io.Writer) (*config, error) {
 	fs.StringVar(&c.token, "token", "", "OAuth access token (default: $CLAUDE_CODE_OAUTH_TOKEN, keychain, or credentials file)")
 	fs.StringVar(&c.configDir, "config-dir", "", "Claude config dir (default: $CLAUDE_CONFIG_DIR or ~/.claude)")
 	fs.StringVar(&c.cacheDir, "cache-dir", "", "cache dir (default: $XDG_CACHE_HOME/claude-usage or ~/.cache/claude-usage)")
-	fs.StringVar(&c.baseURL, "base-url", api.DefaultBaseURL, "API base URL")
-	fs.BoolVar(&c.refreshLogin, "refresh-login", false, "when the stored login is rejected, run `claude -p` (Haiku, one-word reply) so Claude Code refreshes it, then retry")
+	fs.StringVar(&c.baseURL, "base-url", api.DefaultBaseURL, "API base URL, for testing or a proxy; it receives your token (https, or http to localhost only)")
+	fs.BoolVar(&c.refreshLogin, "refresh-login", false, "when the stored login is rejected, run \"claude -p\" (Haiku, one-word reply) so Claude Code refreshes it, then retry")
 	fs.BoolVar(&c.showVer, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: claude-usage [flags]\n\nShows remaining Claude subscription usage and local Claude Code statistics.\n\nFlags:\n")
+		fs.SetOutput(stderr)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	if fs.NArg() > 0 {
-		return nil, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+		// Not quoted: after a stray space or "=" this is the token.
+		return nil, errors.New("unexpected argument (all options start with --; see --help)")
+	}
+	if err := checkBaseURL(c.baseURL); err != nil {
+		return nil, err
 	}
 	switch c.format {
 	case "ansi", "plain", "json":
@@ -152,6 +162,30 @@ func parseFlags(args []string, stderr io.Writer) (*config, error) {
 	}
 	return c, nil
 }
+
+// checkBaseURL accepts only servers the token can be sent to without
+// travelling unencrypted over a network. The error does not quote the URL,
+// which may hold a password.
+func checkBaseURL(s string) error {
+	if u, err := url.Parse(s); err == nil && u.Hostname() != "" {
+		switch host := u.Hostname(); u.Scheme {
+		case "https":
+			return nil
+		case "http":
+			if ip := net.ParseIP(host); host == "localhost" || ip != nil && ip.IsLoopback() {
+				return nil
+			}
+		}
+	}
+	return errors.New("invalid --base-url (must be https, or http to localhost)")
+}
+
+// tokenLike matches Anthropic tokens and API keys.
+var tokenLike = regexp.MustCompile(`sk-ant[A-Za-z0-9_-]*`)
+
+// redact removes anything that looks like a token from a message about the
+// command line, which quotes what was typed.
+func redact(msg string) string { return tokenLike.ReplaceAllString(msg, "[redacted]") }
 
 // env abstracts the process environment for testing.
 type env struct {
@@ -225,11 +259,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		fmt.Fprintln(stderr, "claude-usage:", err)
+		msg := redact(err.Error())
+		fmt.Fprintln(stderr, "claude-usage:", msg)
 		if inWidget(e) {
 			// cmdrunner discards stderr; without this the widget would
 			// only say "exit status 2".
-			fmt.Fprintln(stdout, "claude-usage:", err)
+			fmt.Fprintln(stdout, "claude-usage:", msg)
 		}
 		return 2
 	}
@@ -305,6 +340,7 @@ func collect(c *config, e env) *report.Report {
 			dir = cache.DefaultDir()
 		}
 		store := cache.Store{Dir: dir}
+		scrubProfiles(store)
 		explicitToken := c.token != "" || e.getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 		cr, err := creds.Load(creds.Options{Token: c.token, ConfigDir: c.configDir})
 		if err != nil {
@@ -314,7 +350,7 @@ func collect(c *config, e env) *report.Report {
 			// the config dir, so data fetched before the credentials went
 			// missing (logout, a rewrite in progress) can still be shown.
 			if !explicitToken {
-				suffix := cacheSuffix(configDir, false, "")
+				suffix := cacheSuffix(configDir, false, "", c.baseURL)
 				if needAPI {
 					if ce := store.Load("usage" + suffix); ce.HasBody() {
 						if u, perr := api.ParseUsage(ce.Body); perr == nil {
@@ -355,7 +391,7 @@ func collect(c *config, e env) *report.Report {
 			}
 			// The cache is keyed by config dir so different accounts
 			// (CLAUDE_CONFIG_DIR) don't share data.
-			suffix := cacheSuffix(configDir, explicitToken, cr.AccessToken)
+			suffix := cacheSuffix(configDir, explicitToken, cr.AccessToken, c.baseURL)
 			var refresher *loginRefresher
 			if c.refreshLogin && cr.Source != "flag" && cr.Source != "env" {
 				// Only an explicit config dir is passed on: Claude Code
@@ -364,8 +400,10 @@ func collect(c *config, e env) *report.Report {
 				if creds.ConfigDirExplicit(credOpts) {
 					reloginDir = configDir
 				}
+				// The login is the same whatever the base URL, so refreshes
+				// are keyed by config dir alone.
 				refresher = &loginRefresher{
-					store: store, name: "relogin" + suffix, now: now,
+					store: store, name: "relogin" + cacheSuffix(configDir, false, "", api.DefaultBaseURL), now: now,
 					load: func() (creds.Credentials, error) { return creds.Load(credOpts) },
 					run: func() error {
 						return relogin.Run(context.Background(), relogin.Options{ConfigDir: reloginDir, Timeout: reloginTimeout})
@@ -417,7 +455,13 @@ func collect(c *config, e env) *report.Report {
 					defer apiWG.Done()
 					// Plan data is optional (and some tokens lack the profile
 					// scope), so failures back off for longer.
-					res := store.Get("profile"+suffix, now, policy(c.profileTTL, 10*time.Minute, validateProfile), get(api.ProfilePath))
+					res := store.Get("profile"+suffix, now, policy(c.profileTTL, 10*time.Minute, validateProfile), func() ([]byte, error) {
+						body, err := get(api.ProfilePath)()
+						if err != nil {
+							return body, err
+						}
+						return api.TrimProfile(body)
+					})
 					if res.Body != nil {
 						profile, _ = api.ParseProfile(res.Body)
 					}

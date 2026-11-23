@@ -53,3 +53,39 @@ func ParseProfile(b []byte) (*Profile, error) {
 		HasClaudePro:       bool(acct.HasPro),
 	}, nil
 }
+
+// TrimProfile reduces a profile response to the fields ParseProfile reads, so
+// that the email, names and ids in it are never written to disk. It is built
+// from the parsed values: an unexpected type cannot smuggle anything through.
+func TrimProfile(b []byte) ([]byte, error) {
+	p, err := ParseProfile(b)
+	if err != nil {
+		return nil, err
+	}
+	type account struct {
+		HasMax bool `json:"has_claude_max"`
+		HasPro bool `json:"has_claude_pro"`
+	}
+	type organization struct {
+		PlanLabel          string `json:"plan_display_label"`
+		PlanName           string `json:"plan_display_name"`
+		RateLimitTier      string `json:"rate_limit_tier"`
+		OrganizationType   string `json:"organization_type"`
+		SubscriptionStatus string `json:"subscription_status"`
+		ExtraUsageEnabled  bool   `json:"has_extra_usage_enabled"`
+	}
+	return json.Marshal(struct {
+		Account      account      `json:"account"`
+		Organization organization `json:"organization"`
+	}{
+		account{HasMax: p.HasClaudeMax, HasPro: p.HasClaudePro},
+		organization{
+			PlanLabel:          p.PlanLabel,
+			PlanName:           p.PlanName,
+			RateLimitTier:      p.RateLimitTier,
+			OrganizationType:   p.OrganizationType,
+			SubscriptionStatus: p.SubscriptionStatus,
+			ExtraUsageEnabled:  p.ExtraUsageEnabled,
+		},
+	})
+}

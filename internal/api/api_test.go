@@ -223,3 +223,69 @@ func TestDescribeKeepsUTF8(t *testing.T) {
 		t.Errorf("Describe = %q (%d bytes)", got, len(got))
 	}
 }
+
+// A redirect would carry the bearer token along, even from https to plain
+// http on the same host, so none is followed.
+func TestClientRefusesRedirects(t *testing.T) {
+	reached := false
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.Write([]byte(`{}`))
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer secure.Close()
+
+	hc := secure.Client()
+	body, err := (&Client{HTTP: hc, BaseURL: secure.URL, Token: "tok"}).Get(context.Background(), UsagePath)
+	if reached {
+		t.Error("the redirect was followed")
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusFound || body != nil {
+		t.Errorf("body %q, err %v, want HTTP 302", body, err)
+	}
+	if got := Describe(err); got != "redirect refused (302)" {
+		t.Errorf("Describe = %q", got)
+	}
+	if hc.CheckRedirect != nil {
+		t.Error("the caller's http.Client was modified")
+	}
+}
+
+// TrimProfile keeps exactly what ParseProfile reads.
+func TestTrimProfile(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/profile.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"fixture": b,
+		"odd types": []byte(`{"account":{"has_claude_max":"true","has_claude_pro":1,"email":"user@example.com"},
+			"organization":{"plan_display_label":{"email":"user@example.com"},"plan_display_name":7,"rate_limit_tier":null,"has_extra_usage_enabled":"1"}}`),
+		"empty": []byte(`{}`),
+	} {
+		trimmed, err := TrimProfile(body)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want, _ := ParseProfile(body)
+		got, err := ParseProfile(trimmed)
+		if err != nil || *got != *want {
+			t.Errorf("%s: parsed %+v (%v), want %+v", name, got, err, want)
+		}
+		for _, s := range []string{"user@example.com", "Example", "uuid", "created_at"} {
+			if strings.Contains(string(trimmed), s) {
+				t.Errorf("%s: kept %q: %s", name, s, trimmed)
+			}
+		}
+		if again, _ := TrimProfile(trimmed); string(again) != string(trimmed) {
+			t.Errorf("%s: not stable: %s then %s", name, trimmed, again)
+		}
+	}
+	if _, err := TrimProfile([]byte(`[]`)); !errors.Is(err, ErrNotObject) {
+		t.Errorf("array: %v", err)
+	}
+}
