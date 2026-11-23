@@ -52,8 +52,14 @@ back to the older `five_hour` / `seven_day` / `seven_day_*` objects.
 Requires Go 1.22 or newer. There are no third-party dependencies.
 
 ```sh
-git clone <this repo> claude-usage && cd claude-usage
-go install ./cmd/claude-usage      # installs to $(go env GOPATH)/bin
+go install github.com/Arwalk/wtf-claude/cmd/claude-usage@latest   # installs to $(go env GOPATH)/bin
+```
+
+Or from a clone:
+
+```sh
+git clone https://github.com/Arwalk/wtf-claude && cd wtf-claude
+go install ./cmd/claude-usage
 # or
 go build -o claude-usage ./cmd/claude-usage
 ```

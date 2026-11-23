@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"claude-usage/internal/api"
-	"claude-usage/internal/localstats"
-	"claude-usage/internal/report"
+	"github.com/Arwalk/wtf-claude/internal/api"
+	"github.com/Arwalk/wtf-claude/internal/localstats"
+	"github.com/Arwalk/wtf-claude/internal/report"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")

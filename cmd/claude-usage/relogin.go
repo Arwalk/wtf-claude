@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-usage/internal/cache"
-	"claude-usage/internal/creds"
+	"github.com/Arwalk/wtf-claude/internal/cache"
+	"github.com/Arwalk/wtf-claude/internal/creds"
 )
 
 const (

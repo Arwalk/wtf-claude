@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"claude-usage/internal/localstats"
-	"claude-usage/internal/report"
+	"github.com/Arwalk/wtf-claude/internal/localstats"
+	"github.com/Arwalk/wtf-claude/internal/report"
 )
 
 // MinWidth is the narrowest layout supported; narrower requests are clamped.

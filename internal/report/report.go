@@ -10,8 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"claude-usage/internal/api"
-	"claude-usage/internal/localstats"
+	"github.com/Arwalk/wtf-claude/internal/api"
+	"github.com/Arwalk/wtf-claude/internal/localstats"
 )
 
 // Severity levels used for colouring.

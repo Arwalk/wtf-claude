@@ -17,13 +17,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"claude-usage/internal/api"
-	"claude-usage/internal/cache"
-	"claude-usage/internal/creds"
-	"claude-usage/internal/localstats"
-	"claude-usage/internal/relogin"
-	"claude-usage/internal/render"
-	"claude-usage/internal/report"
+	"github.com/Arwalk/wtf-claude/internal/api"
+	"github.com/Arwalk/wtf-claude/internal/cache"
+	"github.com/Arwalk/wtf-claude/internal/creds"
+	"github.com/Arwalk/wtf-claude/internal/localstats"
+	"github.com/Arwalk/wtf-claude/internal/relogin"
+	"github.com/Arwalk/wtf-claude/internal/render"
+	"github.com/Arwalk/wtf-claude/internal/report"
 )
 
 // version is overridable with -ldflags "-X main.version=...".

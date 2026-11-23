@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-usage/internal/api"
+	"github.com/Arwalk/wtf-claude/internal/api"
 )
 
 var now = time.Date(2026, 11, 16, 16, 47, 48, 0, time.UTC)
