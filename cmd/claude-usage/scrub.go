@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
-	"path/filepath"
+	"os"
 	"regexp"
 	"strings"
 
@@ -18,10 +18,11 @@ var profileEntry = regexp.MustCompile(`^profile(-[0-9a-f]{8})?$`)
 // All accounts are covered: an entry nobody refreshes any more would
 // otherwise keep them forever.
 func scrubProfiles(store cache.Store) {
-	files, _ := filepath.Glob(filepath.Join(store.Dir, "profile*.json"))
+	// Not filepath.Glob: the directory's path may hold pattern characters.
+	files, _ := os.ReadDir(store.Dir)
 	for _, f := range files {
-		name := strings.TrimSuffix(filepath.Base(f), ".json")
-		if !profileEntry.MatchString(name) || trimmed(store.Load(name)) == nil {
+		name, ok := strings.CutSuffix(f.Name(), ".json")
+		if !ok || !profileEntry.MatchString(name) || trimmed(store.Load(name)) == nil {
 			continue
 		}
 		// Take the refresh lock and look again, so that an entry another

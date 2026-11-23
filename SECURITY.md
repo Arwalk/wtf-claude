@@ -7,9 +7,11 @@ What it does with the token is described in
 ## Reporting a problem
 
 Please report anything that could expose a token or personal data privately,
-through **Security → Report a vulnerability** on this repository's GitHub
-page, not in a public issue. Leave real tokens, and the email, names and ids
-in API responses, out of the report.
+through **Security and quality → Report a vulnerability** on this
+repository's GitHub page, not in a public issue. If that button is missing,
+open an issue that only asks for a private contact, without any details.
+Leave real tokens, and the email, names and ids in API responses, out of the
+report.
 
 Only the latest version is supported. This is a spare-time project, so there
 is no guaranteed response time.

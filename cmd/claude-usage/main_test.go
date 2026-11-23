@@ -214,8 +214,20 @@ func fixtureHandler(t *testing.T, calls *int32, status *int32) http.HandlerFunc 
 
 // cacheFiles lists the cache entries for name; their full names depend on
 // the test server's URL.
-func cacheFiles(home, name string) []string {
-	files, _ := filepath.Glob(filepath.Join(home, "cache", "claude-usage", name+"*.json"))
+func cacheFiles(t *testing.T, home, name string) []string {
+	t.Helper()
+	dir := filepath.Join(home, "cache", "claude-usage")
+	// Not filepath.Glob: the temp dir's own path may hold pattern characters.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), name) && strings.HasSuffix(e.Name(), ".json") {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
 	return files
 }
 
@@ -249,7 +261,7 @@ func TestEndToEnd(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("calls = %d, want 2", calls)
 	}
-	files := cacheFiles(home, "usage")
+	files := cacheFiles(t, home, "usage")
 	if len(files) != 1 {
 		t.Fatalf("cache files: %v", files)
 	}
@@ -376,6 +388,7 @@ func TestWidgetHeight(t *testing.T) {
 
 // cmdrunner discards stderr, so flag errors must also reach stdout there.
 func TestFlagErrorInWidget(t *testing.T) {
+	setup(t, nil) // an accepted command line would run for real
 	t.Setenv("WTF_WIDGET_WIDTH", "40")
 	out, code := runCmd(t, "--sections", "limit,local")
 	if code != 2 || !strings.Contains(out, `unknown section "limit"`) {
@@ -561,7 +574,7 @@ func TestRefreshLoginBackoff(t *testing.T) {
 		t.Errorf("first run: %+v", r)
 	}
 	// Drop the API back-off so the next run requests (and is rejected) again.
-	for _, f := range append(cacheFiles(home, "usage"), cacheFiles(home, "profile")...) {
+	for _, f := range append(cacheFiles(t, home, "usage"), cacheFiles(t, home, "profile")...) {
 		os.Remove(f)
 	}
 	before := atomic.LoadInt32(&calls)
@@ -574,6 +587,10 @@ func TestRefreshLoginBackoff(t *testing.T) {
 	}
 	if n := runs(); n != 1 {
 		t.Errorf("claude ran %d times, want 1", n)
+	}
+	// The back-off belongs to the login, whatever the server.
+	if f := cacheFiles(t, home, "relogin"); len(f) != 1 || filepath.Base(f[0]) != "relogin.json" {
+		t.Errorf("back-off entries: %v, want relogin.json", f)
 	}
 }
 
@@ -754,6 +771,15 @@ func TestFlagErrorsNeverEchoToken(t *testing.T) {
 		{"--format", "sk-ant-oat01-SECRET"},
 		{"--sections", "sk-ant-oat01-SECRET"},
 		{"--sections", "plan", "--format", "x-sk-ant-oat01-SECRET"},
+		{"--width", "sk-ant-api03-ab_SECRET"},
+		// A pasted token that was wrapped or folded.
+		{"---token=sk-ant-oat01-HEAD\n  SECRET"},
+		{"--token sk-ant-oat01-HEAD SECRET"},
+		{"--width=sk-ant-oat01-HEAD\n  SECRET"},
+		// A proxy's token need not look like Anthropic's.
+		{"---token=SECRET"},
+		{"--token SECRET"},
+		{"--tokenSECRET"},
 		{"--base-url", "https://user:oat01-SECRET@"},
 	} {
 		var out, errb bytes.Buffer
@@ -775,6 +801,7 @@ func TestBaseURLNeedsHTTPSOrLoopback(t *testing.T) {
 	for _, bad := range []string{
 		"http://api.example.invalid", "http://10.0.0.1", "http://127.0.0.1.example.invalid",
 		"http://localhost.example.invalid", "http://127.0.0.1@api.example.invalid",
+		"http://evillocalhost", "http://0.0.0.0", "",
 		"ftp://127.0.0.1", "api.example.invalid", "https://", "http://", "https://api.example.invalid:port", "://",
 	} {
 		var stderr bytes.Buffer
@@ -812,6 +839,7 @@ func TestCacheIsPerBaseURL(t *testing.T) {
 }
 
 func TestHelpShowsRefreshLoginAsSwitch(t *testing.T) {
+	setup(t, nil) // an accepted command line would run for real
 	var out, errb bytes.Buffer
 	if code := run([]string{"--help"}, &out, &errb); code != 0 {
 		t.Errorf("exit %d", code)
@@ -825,26 +853,16 @@ func TestHelpShowsRefreshLoginAsSwitch(t *testing.T) {
 // holder; none of it may reach the disk.
 var personalFixtureData = []string{"user@example.com", "Example User", "Example Org", "00000000-0000-4000-8000", "created_at", "invoice"}
 
-func cacheContents(t *testing.T, dir string) string {
-	t.Helper()
-	files, _ := filepath.Glob(filepath.Join(dir, "*"))
-	var all strings.Builder
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		all.Write(b)
-	}
-	return all.String()
-}
-
 func TestProfileCacheHoldsNoPersonalData(t *testing.T) {
 	var calls, status int32 = 0, 200
 	srv, home := setup(t, fixtureHandler(t, &calls, &status))
 	args := []string{"--base-url=" + srv.URL, "--no-local", "--format", "plain", "--sections", "plan"}
 	first, _ := runCmd(t, args...)
-	cached := cacheContents(t, filepath.Join(home, "cache", "claude-usage"))
+	var cached string
+	for _, f := range cacheFiles(t, home, "") {
+		b, _ := os.ReadFile(f)
+		cached += string(b)
+	}
 	if !strings.Contains(cached, "default_claude_max_20x") {
 		t.Fatalf("profile was not cached:\n%s", cached)
 	}
@@ -876,9 +894,6 @@ func TestOldProfileCachesAreScrubbed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Not one of ours: left alone.
-	foreign := filepath.Join(dir, "profile-notes.json")
-	os.WriteFile(foreign, []byte(`{"email":"mine"}`), 0o600)
 
 	runCmd(t, "--base-url="+srv.URL, "--no-local", "--format", "plain", "--compact")
 	for _, name := range []string{"profile", "profile-0badf00d"} {
@@ -893,8 +908,55 @@ func TestOldProfileCachesAreScrubbed(t *testing.T) {
 			t.Errorf("%s lost data: %+v", name, e)
 		}
 	}
-	if b, _ := os.ReadFile(foreign); string(b) != `{"email":"mine"}` {
-		t.Errorf("foreign file changed: %s", b)
+}
+
+// Scrubbing leaves entries that another process is refreshing and files that
+// are not ours alone, and always gives the lock back.
+func TestScrubProfiles(t *testing.T) {
+	profile, err := os.ReadFile("../../testdata/profile.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The path must not be taken for a pattern.
+	store := cache.Store{Dir: filepath.Join(t.TempDir(), "[x]", "c*d")}
+	if runtime.GOOS == "windows" {
+		store.Dir = filepath.Join(t.TempDir(), "[x]")
+	}
+	for _, name := range []string{"profile", "profile-notes"} {
+		if err := store.Save(name, cache.Entry{FetchedAt: time.Now(), Body: profile}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	personal := func(name string) bool { return strings.Contains(string(store.Load(name).Body), "user@example.com") }
+
+	if unlock, err := store.Lock("profile", 0); err == nil {
+		scrubProfiles(store)
+		if !personal("profile") {
+			t.Error("entry changed while another process held its lock")
+		}
+		unlock()
+	}
+	scrubProfiles(store)
+	if personal("profile") {
+		t.Error("entry not trimmed")
+	}
+	if !personal("profile-notes") {
+		t.Error("a file that is not a cache entry was changed")
+	}
+	if unlock, err := store.Lock("profile", 0); errors.Is(err, cache.ErrLockTimeout) {
+		t.Error("lock not released")
+	} else if err == nil {
+		unlock()
+	}
+}
+
+// A failed profile request keeps its reason.
+func TestProfileErrorIsReported(t *testing.T) {
+	var calls, status int32 = 0, 503
+	srv, _ := setup(t, fixtureHandler(t, &calls, &status))
+	out, _ := runCmd(t, "--base-url="+srv.URL, "--no-local", "--sections", "plan", "--format", "json")
+	if !strings.Contains(out, `"profile_error": "server error (503)"`) {
+		t.Errorf("profile_error missing:\n%s", out)
 	}
 }
 

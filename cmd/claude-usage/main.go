@@ -180,8 +180,10 @@ func checkBaseURL(s string) error {
 	return errors.New("invalid --base-url (must be https, or http to localhost)")
 }
 
-// tokenLike matches Anthropic tokens and API keys.
-var tokenLike = regexp.MustCompile(`sk-ant[A-Za-z0-9_-]*`)
+// tokenLike matches Anthropic tokens and API keys, and whatever follows a
+// misplaced --token (a proxy's token can look like anything). It runs to the
+// end of the message: a pasted token may be wrapped or folded.
+var tokenLike = regexp.MustCompile(`(?is)sk-ant.*|-token.+`)
 
 // redact removes anything that looks like a token from a message about the
 // command line, which quotes what was typed.

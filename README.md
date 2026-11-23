@@ -196,7 +196,8 @@ wtf:
 ### JSON output
 
 `--format json` prints a normalized document, which is a stable interface for
-scripts (fields are omitted when unknown):
+scripts. Fields are omitted when unknown, and times are RFC 3339 (possibly
+with fractional seconds and a local offset):
 
 ```jsonc
 {
@@ -247,7 +248,8 @@ scripts (fields are omitted when unknown):
     "auth_error": true,              // usage_error needs you to act: login expired or
                                      // rejected, 403, credentials missing/unreadable
     "credential_source": "/home/me/.claude/.credentials.json",
-    "no_limit_data": false,
+    "no_limit_data": true,           // the API reported no limits; like auth_error and
+                                     // login_refreshed, only present when true
     "login_refreshed": true,         // --refresh-login renewed the login this run
     "login_refresh_error": "..."     // why --refresh-login could not renew it
   }
@@ -324,7 +326,7 @@ and no new attempt is made for 30 minutes. The reason is in
 `login_refresh_error` in the JSON output.
 
 **Caching.** Responses are cached in `$XDG_CACHE_HOME/claude-usage` (or
-`~/.cache/claude-usage`). Files there are mode 0600 and the directory is 0700.
+`~/.cache/claude-usage`). Files there are mode 0600; the directory is created with mode 0700.
 Of the plan response only the fields shown under `plan` (plan name, tier,
 status and similar) are stored. The email, names and ids in it are dropped
 first, and removed from caches written by older versions. Cached data is kept
@@ -332,8 +334,9 @@ after you log out; delete the directory to remove it.
 Usage data is cached for 120 s and plan data for 1 h. When a refresh fails
 (network error, timeout, 429 or 5xx), the last good data is shown with a dim
 `stale · fetched 12m ago · <reason>` line. After a failure, the tool waits 30 s
-(or as long as `Retry-After` asks) before trying again, so several widgets
-don't hammer a rate-limited endpoint. Refreshes take a lock file next to the
+for usage and 10 minutes for plan data (or as long as `Retry-After` asks, up
+to 15 minutes) before trying again, so several widgets don't hammer a
+rate-limited endpoint. Refreshes take a lock file next to the
 cache entry, so when several widgets refresh at once only one request is
 made and the others read its result. If there is no cached data at all, a
 one-line error is shown and the local stats are still rendered. Requests time
@@ -359,10 +362,16 @@ opened, and files are parsed in parallel.
 * **This tool uses your Claude Code login outside Anthropic's own apps.**
   [Anthropic's documentation](https://code.claude.com/docs/en/legal-and-compliance)
   says that this login is "designed to support ordinary use of Claude Code
-  and other native Anthropic applications", and that Anthropic may enforce
-  its restrictions without prior notice. As of November 2026 that page neither
-  allows nor forbids a tool that only reads your own usage, so use it at your
-  own risk. Within Claude Code, `/usage` and the `rate_limits` fields of the
+  and other native Anthropic applications", and that third-party developers
+  may not "route requests through Free, Pro, Max, or Ultra plan credentials on
+  behalf of their users" or "collect, store, or intermediate Claude.ai
+  credentials or session tokens". Section 3 of the
+  [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) restricts
+  access "through automated or non-human means" without an API key or explicit
+  permission. Neither mentions a tool that shows you your own usage (as of
+  November 2026), and Anthropic may enforce its restrictions without prior
+  notice. Use this tool at your own risk. Within Claude Code, `/usage` and the
+  `rate_limits` fields of the
   [status line](https://code.claude.com/docs/en/statusline) show your limits
   officially.
 * **The usage and profile endpoints are undocumented** and may change or

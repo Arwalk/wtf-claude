@@ -289,3 +289,21 @@ func TestTrimProfile(t *testing.T) {
 		t.Errorf("array: %v", err)
 	}
 }
+
+// Not even one on the same server.
+func TestClientRefusesSameOriginRedirects(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path == UsagePath {
+			http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	_, err := (&Client{HTTP: srv.Client(), BaseURL: srv.URL, Token: "tok"}).Get(context.Background(), UsagePath)
+	if requests != 1 || err == nil {
+		t.Errorf("%d requests, err %v; want 1 and an error", requests, err)
+	}
+}

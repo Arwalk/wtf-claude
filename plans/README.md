@@ -25,8 +25,10 @@ windows/darwin/freebsd clean.
 | [003](003-text-hygiene-at-output-boundaries.md) | Strip terminal control chars; UTF-8-safe string cuts | P2 | S | — (run after 001/002: shared test files) | DONE |
 | [004](004-agents-md.md) | Add AGENTS.md / CLAUDE.md with repo invariants | P3 | S | best after 001-003 | DONE |
 
-All four plans are merged into `main`. They are kept as a record of how the
-work was specified; the `advisor/*` branches they name are not published.
+All four plans are merged into `main`. They are kept as a record of the
+repository on 2026-11-16: line numbers, the module path `claude-usage` and the
+agent skill they mention are out of date, and the `advisor/*` branches they
+name are not published.
 
 Follow-ups from review (minor, not blocking):
 - 001: a maintainer on macOS should check the terminal width live in a
@@ -77,9 +79,6 @@ with `go install`.
   (`internal/cache/cache.go:179-190`, ctx from `main.go:325`): needs the lock
   holder to be stuck longer than its own 10 s HTTP timeout (e.g. a suspended
   process). Too rare to matter.
-- **Cache dir fallback to `os.TempDir()` when `$HOME` is unresolvable**
-  (`internal/cache/cache.go:41`): only without a home dir, and the cache holds
-  usage and plan data, no credentials and no personal data.
 - **`--token` visible in `ps`**: the README warns about it and recommends the
   stored login.
 - **Goroutines in `collect` writing `status` concurrently**
