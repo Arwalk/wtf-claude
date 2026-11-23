@@ -6,6 +6,10 @@ meant to run inside a [wtfutil](https://wtfutil.com) dashboard through
 wtfutil's built-in `cmdrunner` module, and it works just as well in a plain
 terminal.
 
+> **Unofficial.** This project is not affiliated with, endorsed by or
+> supported by Anthropic. Claude and Claude Code are trademarks of Anthropic.
+> Please read [the note on Anthropic's terms](#caveats) before using it.
+
 ```
 Ultra plan · Max 20x
  Weekly · all models ██████████████░░░░░░░░░░░░░░░░ 54% left
@@ -63,6 +67,9 @@ go install ./cmd/claude-usage
 # or
 go build -o claude-usage ./cmd/claude-usage
 ```
+
+Linux and macOS are supported. Windows builds, but without terminal-width
+detection and without the lock that lets several widgets share one request.
 
 You must be logged in to Claude Code with a Claude subscription (`claude`,
 then `/login`). API-key logins have no subscription usage to show.
@@ -349,6 +356,15 @@ opened, and files are parsed in parallel.
 
 ## Caveats
 
+* **This tool uses your Claude Code login outside Anthropic's own apps.**
+  [Anthropic's documentation](https://code.claude.com/docs/en/legal-and-compliance)
+  says that this login is "designed to support ordinary use of Claude Code
+  and other native Anthropic applications", and that Anthropic may enforce
+  its restrictions without prior notice. As of November 2026 that page neither
+  allows nor forbids a tool that only reads your own usage, so use it at your
+  own risk. Within Claude Code, `/usage` and the `rate_limits` fields of the
+  [status line](https://code.claude.com/docs/en/statusline) show your limits
+  officially.
 * **The usage and profile endpoints are undocumented** and may change or
   disappear without notice. Parsing is deliberately tolerant: nulls, missing
   fields, unexpected types and unknown limit kinds are handled. A big change
@@ -388,3 +404,10 @@ internal/report/      normalized report model: labels, severity, pace, plan, spe
 internal/render/      width-aware ANSI/plain renderer and JSON output
 testdata/             recorded API responses (personal data scrubbed)
 ```
+
+CI runs the same checks on Linux, macOS and Windows. To report a security
+problem, see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)

@@ -20,14 +20,13 @@ windows/darwin/freebsd clean.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| [001](001-terminal-width-detection.md) | Size output to the real terminal in a plain terminal | P1 | S | — | DONE: `advisor/001-terminal-width` |
-| [002](002-surface-local-scan-errors.md) | Report unreadable transcripts instead of "no activity" | P1 | S | — (run after 001: shared test file) | DONE: `advisor/002-local-scan-errors` |
-| [003](003-text-hygiene-at-output-boundaries.md) | Strip terminal control chars; UTF-8-safe string cuts | P2 | S | — (run after 001/002: shared test files) | DONE: `advisor/003-text-hygiene` |
-| [004](004-agents-md.md) | Add AGENTS.md / CLAUDE.md with repo invariants | P3 | S | best after 001-003 | DONE: `advisor/004-agents-md` (1 revision) |
+| [001](001-terminal-width-detection.md) | Size output to the real terminal in a plain terminal | P1 | S | — | DONE |
+| [002](002-surface-local-scan-errors.md) | Report unreadable transcripts instead of "no activity" | P1 | S | — (run after 001: shared test file) | DONE |
+| [003](003-text-hygiene-at-output-boundaries.md) | Strip terminal control chars; UTF-8-safe string cuts | P2 | S | — (run after 001/002: shared test files) | DONE |
+| [004](004-agents-md.md) | Add AGENTS.md / CLAUDE.md with repo invariants | P3 | S | best after 001-003 | DONE |
 
-All four branches are stacked: `main` → 001 → 002 → 003 → 004.
-Merging `advisor/004-agents-md` into `main` lands everything. Not merged yet;
-merging is the maintainer's call.
+All four plans are merged into `main`. They are kept as a record of how the
+work was specified; the `advisor/*` branches they name are not published.
 
 Follow-ups from review (minor, not blocking):
 - 001: a maintainer on macOS should check the terminal width live in a
@@ -54,13 +53,6 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 
 ## Findings not planned (offered, not selected on 2026-11-16)
 
-- **No CI**: there is no `.github/` and no Makefile, so the darwin keychain
-  path and build-tagged files only get compiled when someone remembers to.
-  Worth a plan once the code lives in a GitHub repo.
-- **`--base-url` sends the bearer token to any scheme or host**
-  (`cmd/claude-usage/main.go:92`, `internal/api/client.go:56-60`). Could
-  restrict it to https plus loopback http. Low impact: the user sets the flag
-  themselves.
 - **Investigate**: whether `CLAUDE_CODE_OAUTH_TOKEN` tokens (from
   `claude setup-token`) have the scope the usage/profile endpoints need. If
   not, that documented path always shows `access denied (403)`. Check by
@@ -70,10 +62,11 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   already refreshes about every 2 min, then overwrites) to project from the
   recent burn rate and draw a trend. Today the README admits the pace uses the
   window-average rate "as a hint". Design/spike, M-L.
-- **Direction: `go install`-able.** `go.mod` declares `module claude-usage`,
-  so `go install <repo>@latest` is impossible and the README requires a
-  clone. The version is hard-coded at `main.go:28`; `debug.ReadBuildInfo`
-  could supply it instead. Needs the canonical repo URL.
+- **Direction: version from the build.** The version is hard-coded in
+  `main.go`; `debug.ReadBuildInfo` could supply it.
+
+Done since: CI, the `--base-url` restriction, and a module path that works
+with `go install`.
 
 ## Findings considered and rejected
 
@@ -86,9 +79,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
   process). Too rare to matter.
 - **Cache dir fallback to `os.TempDir()` when `$HOME` is unresolvable**
   (`internal/cache/cache.go:41`): only without a home dir, and the cache holds
-  usage percentages, not credentials.
-- **`--token` visible in `ps`**: the `CLAUDE_CODE_OAUTH_TOKEN` alternative is
-  documented. The user chooses.
+  usage and plan data, no credentials and no personal data.
+- **`--token` visible in `ps`**: the README warns about it and recommends the
+  stored login.
 - **Goroutines in `collect` writing `status` concurrently**
   (`main.go:356-375`): they write different fields, and `go test -race` is
   clean.

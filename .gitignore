@@ -1,0 +1,20 @@
+# Build and test output (anchored: cmd/claude-usage/ is source)
+/claude-usage
+/dist/
+*.exe
+*.test
+*.out
+*.prof
+
+# Secrets and captured API data
+.env*
+.credentials.json
+/usage*.json
+/profile*.json
+
+# Tools and editors
+.jj/
+.claude/settings.local.json
+.idea/
+.vscode/
+.DS_Store

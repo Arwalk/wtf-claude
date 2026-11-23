@@ -36,6 +36,9 @@ behaviour.
   parsed, and `api.TrimProfile` drops them before anything is cached.
   Fixtures in `testdata/` must be scrubbed before committing, including ids
   and account timestamps.
+- **This repository is public.** Don't write unfixed security problems,
+  personal data, machine details or ids of unpublished commits into `plans/`,
+  commit messages or anything else that is tracked. See `SECURITY.md`.
 - **Tolerant parsing.** The usage/profile endpoints are undocumented. Only a
   non-object body is an error; every field may be null, missing or the wrong
   type (use the `flex*` types in `internal/api/flex.go`).
@@ -66,7 +69,8 @@ behaviour.
 - `run()` uses the real clock, so no test may depend on a date in a fixture
   still being in the future (see `currentFixture`).
 - Tests isolate themselves with `t.TempDir()`, `t.Setenv("HOME", …)` and
-  `httptest` servers (see `setup` in `cmd/claude-usage/main_test.go`); new
+  `httptest` servers (see `setup` in `cmd/claude-usage/main_test.go`, which
+  also hides the macOS keychain); new
   tests must not depend on the real `~/.claude` or the network.
 
 ## Layout
@@ -80,4 +84,5 @@ behaviour.
     internal/report/      normalized report model: labels, severity, pace, plan, spend
     internal/render/      width-aware ANSI/plain renderer and JSON output
     testdata/             recorded API responses (personal data scrubbed)
+    .github/workflows/    CI: the checks above on Linux, macOS and Windows
     plans/                improvement plans; update plans/README.md status rows
