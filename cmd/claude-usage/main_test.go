@@ -128,6 +128,8 @@ func TestParseFlags(t *testing.T) {
 }
 
 // setup creates an isolated HOME with credentials and a fake API server.
+// Nothing of the caller's environment (home, keychain, widget or terminal
+// size) is visible to the test.
 func setup(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -135,14 +137,31 @@ func setup(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
 	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"),
 		[]byte(`{"claudeAiOauth":{"accessToken":"sk-test-SECRET","expiresAt":4102444800000}}`), 0o600)
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-	t.Setenv("WTF_WIDGET_WIDTH", "")
-	t.Setenv("NO_COLOR", "")
+	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN",
+		"WTF_WIDGET_WIDTH", "WTF_WIDGET_HEIGHT", "COLUMNS", "NO_COLOR"} {
+		t.Setenv(k, "")
+	}
+	emptyKeychain(t)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv, home
+}
+
+// emptyKeychain puts a `security` on PATH that finds no item, so that tests
+// on macOS never read the developer's real login.
+func emptyKeychain(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return // no keychain lookup there, and no shell scripts
+	}
+	bin := t.TempDir()
+	// 44 is errSecItemNotFound.
+	if err := os.WriteFile(filepath.Join(bin, "security"), []byte("#!/bin/sh\nexit 44\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // currentFixture returns testdata/usage.json with its recorded weekly window
@@ -597,6 +616,11 @@ func TestCredentialErrorUsesCache(t *testing.T) {
 
 // Two widgets refreshing on the same tick make one request per endpoint.
 func TestConcurrentRunsShareFetch(t *testing.T) {
+	if unlock, err := (cache.Store{Dir: t.TempDir()}).Lock("probe", 0); err != nil {
+		t.Skipf("no cross-process lock here: %v", err)
+	} else {
+		unlock()
+	}
 	var calls, status int32 = 0, 200
 	inner := fixtureHandler(t, &calls, &status)
 	srv, _ := setup(t, func(w http.ResponseWriter, r *http.Request) {

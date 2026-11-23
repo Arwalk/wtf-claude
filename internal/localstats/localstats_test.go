@@ -230,6 +230,7 @@ func TestScanParallelDeterministic(t *testing.T) {
 func TestDefaultDirsExplicit(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	os.MkdirAll(filepath.Join(home, ".claude", "projects"), 0o755)
 	os.MkdirAll(filepath.Join(home, ".config", "claude", "projects"), 0o755)
 	os.MkdirAll(filepath.Join(work, "projects"), 0o755)

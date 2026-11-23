@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,10 +25,14 @@ func TestGetFreshStaleAndBackoff(t *testing.T) {
 		t.Fatalf("first: %+v calls=%d", r, calls)
 	}
 	fi, err := os.Stat(filepath.Join(s.Dir, "usage.json"))
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("cache file mode: %v %v", fi, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if di, _ := os.Stat(s.Dir); di.Mode().Perm() != 0o700 {
+	// Windows has no permission bits to check.
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("cache file mode: %v", fi.Mode())
+	}
+	if di, _ := os.Stat(s.Dir); runtime.GOOS != "windows" && di.Mode().Perm() != 0o700 {
 		t.Errorf("dir mode %v", di.Mode().Perm())
 	}
 
@@ -105,6 +110,11 @@ func TestCorruptCacheIgnored(t *testing.T) {
 // result from disk.
 func TestConcurrentGetFetchesOnce(t *testing.T) {
 	s := Store{Dir: t.TempDir()}
+	if unlock, err := s.Lock("probe", 0); err != nil {
+		t.Skipf("no cross-process lock here: %v", err)
+	} else {
+		unlock()
+	}
 	var calls atomic.Int32
 	fetch := func() ([]byte, error) {
 		calls.Add(1)
